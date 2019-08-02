@@ -93,12 +93,18 @@ class EvtxToElk:
                         #    "metadata": metadata
                         #})
                         #bulk_queue.append(event_record)
-                        bulk_queue.append({
-                            "_index": elk_index,
-                            "_type": elk_index,
-                            "body": json.loads(json.dumps(log_line)),
-                            "metadata": metadata
-                        })
+                        event_data = json.loads(json.dumps(log_line))
+                        event_data["_index"] = elk_index
+                        event_data["_type"] = elk_index
+                        event_data["meta"] = metadata
+                        bulk_queue.append(event_data)
+
+                        #bulk_queue.append({
+                        #    "_index": elk_index,
+                        #    "_type": elk_index,
+                        #    "body": json.loads(json.dumps(log_line)),
+                        #    "metadata": metadata
+                        #})
 
                         if len(bulk_queue) == bulk_queue_len_threshold:
                             print('Bulkingrecords to ES: ' + str(len(bulk_queue)))
