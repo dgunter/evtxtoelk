@@ -29,9 +29,9 @@ def index(es):
     es.indices.delete(index=name, ignore_unavailable=True)
 
 
-def _count(es: Elasticsearch, index: str) -> int:
+def _count(es: Elasticsearch, index: str, **query) -> int:
     es.indices.refresh(index=index)
-    return es.count(index=index)["count"]
+    return es.count(index=index, **query)["count"]
 
 
 def test_server_is_current_major(es):
