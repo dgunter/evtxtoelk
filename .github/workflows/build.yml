@@ -1,0 +1,72 @@
+name: Build
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Read the repo, write the sticky SonarCloud comment on PRs. Nothing else.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    name: Tests + SonarQube
+    runs-on: ubuntu-latest
+    services:
+      elasticsearch:
+        image: elastic/elasticsearch:9.5.3
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          xpack.ml.enabled: "false"
+          ES_JAVA_OPTS: -Xms1g -Xmx1g
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 30
+          --health-start-period 30s
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0  # SonarCloud needs history to attribute new code
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.14"
+
+      - name: Lint
+        run: |
+          uv run --frozen ruff check .
+          uv run --frozen ruff format --check .
+
+      # Unit + integration tests in one run so coverage.xml covers both.
+      # EVTXTOELK_REQUIRE_ES turns "Elasticsearch unreachable" into a failure
+      # instead of a skip, so a broken service container cannot pass silently.
+      - name: Tests
+        env:
+          EVTXTOELK_ES_URL: http://localhost:9200
+          EVTXTOELK_REQUIRE_ES: "1"
+        run: uv run --frozen pytest -q -o addopts="" --cov=evtxtoelk --cov-report=xml:coverage.xml --cov-report=term
+
+      - name: Package builds
+        run: uv build
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Post SonarCloud results to the PR
+        if: github.event_name == 'pull_request'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/sonar_pr_report.py
