@@ -1,0 +1,56 @@
+name: Release
+# Publishes to PyPI when a GitHub release is published. Uses PyPI trusted
+# publishing (OIDC) so no long-lived token is stored anywhere; the `pypi`
+# environment is the one registered as the trusted publisher on pypi.org.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.14"
+      - name: Tag must match the package version
+        run: |
+          version=$(uv run --frozen python -c "import evtxtoelk; print(evtxtoelk.__version__)")
+          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != v${version}"; exit 1; }
+      - name: Unit tests
+        run: uv run --frozen pytest -q
+      - run: uv build
+      - name: Distributions are well-formed
+        run: uv run --with twine twine check dist/*
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/evtxtoelk/
+    permissions:
+      id-token: write   # OIDC token for trusted publishing
+      contents: write   # attach the distributions to the GitHub release
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: dist
+          path: dist/
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - run: uv publish --trusted-publishing always
+      - name: Attach distributions to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber

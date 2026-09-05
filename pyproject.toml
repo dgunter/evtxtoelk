@@ -46,7 +46,20 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.sdist]
-exclude = ["tests/data/*.evtx", ".github", ".idea"]
+only-include = [
+    "evtxtoelk",
+    "tests",
+    "scripts",
+    "docker-compose.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE.txt",
+    "pyproject.toml",
+]
+exclude = ["tests/data/*.evtx"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["evtxtoelk"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
