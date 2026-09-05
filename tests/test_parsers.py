@@ -3,7 +3,8 @@ import pytest
 from evtxtoelk import parsers
 
 
-def test_available_and_select():
+def test_available_and_select(monkeypatch):
+    monkeypatch.delenv(parsers.BACKEND_ENV, raising=False)  # CI forces a backend via the env
     backends = parsers.available_backends()
     assert backends and backends[0] in (parsers.RUST, parsers.PYTHON)
     assert parsers.select_backend() == backends[0]
