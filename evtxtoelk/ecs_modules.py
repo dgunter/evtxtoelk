@@ -24,6 +24,24 @@ from evtxtoelk._ecs_tables import PIPELINE_TABLES
 Flat = dict[str, Any]
 
 EVENT_DATA = "winlog.event_data"
+USER_DATA = "winlog.user_data"
+EVENT_CODE = "event.code"
+EVENT_OUTCOME = "event.outcome"
+WINLOG_TASK = "winlog.task"
+RELATED_USER = "related.user"
+RELATED_IP = "related.ip"
+RELATED_HOSTS = "related.hosts"
+USER_NAME = "user.name"
+SOURCE_IP = "source.ip"
+SOURCE_PORT = "source.port"
+SOURCE_DOMAIN = "source.domain"
+DESTINATION_IP = "destination.ip"
+FILE_PATH = "file.path"
+FILE_NAME = "file.name"
+REGISTRY_PATH = "registry.path"
+REGISTRY_DATA_TYPE = "registry.data.type"
+REGISTRY_DATA_STRINGS = "registry.data.strings"
+
 _SEC = PIPELINE_TABLES.get("security", {})
 _SYS = PIPELINE_TABLES.get("sysmon", {})
 _SEC_EVENTS = _SEC.get("events", {})
@@ -47,41 +65,18 @@ _HIVES = _SYS.get("TargetObject", {})
 
 #: Security event ids whose Target* fields describe a group rather than a user.
 _GROUP_EVENTS = {
-    "4727",
-    "4728",
-    "4729",
-    "4730",
-    "4731",
-    "4732",
-    "4733",
-    "4734",
-    "4735",
-    "4737",
-    "4744",
-    "4745",
-    "4746",
-    "4747",
-    "4748",
-    "4749",
-    "4750",
-    "4751",
-    "4752",
-    "4753",
-    "4754",
-    "4755",
-    "4756",
-    "4757",
-    "4758",
-    "4759",
-    "4760",
-    "4761",
-    "4762",
-    "4763",
-    "4764",
-    "4799",
-}
+    "4727", "4728", "4729", "4730", "4731", "4732", "4733", "4734", "4735", "4737",
+    "4744", "4745", "4746", "4747", "4748", "4749", "4750", "4751", "4752", "4753",
+    "4754", "4755", "4756", "4757", "4758", "4759", "4760", "4761", "4762", "4763",
+    "4764", "4799",
+}  # fmt: skip
 #: Security event ids where Target* is the account that was logged in / acted on.
 _LOGON_EVENTS = {"4624", "4625", "4634", "4647", "4648", "4778", "4779", "4964"}
+_COMPUTER_EVENTS = {"4741", "4742", "4743"}
+_KERBEROS_EVENTS = {"4768", "4769", "4770", "4771", "4772", "4773"}
+_OBJECT_EVENTS = {"4656", "4658", "4660", "4663", "4670", "4907"}
+_SHARE_EVENTS = {"5140", "5145"}
+_SERVICE_EVENTS = {"4697", "7045"}
 _NULL = {"", "-", "NULL SID", "%%1793"}
 
 #: Task names as the Sysmon manifest renders them. Winlogbeat has them from the
@@ -186,9 +181,6 @@ _SECURITY_TASKS = {
 # -- helpers ------------------------------------------------------------------------------
 
 
-USER_DATA = "winlog.user_data"
-
-
 def _ed(flat: Flat, name: str) -> str | None:
     value = flat.get(f"{EVENT_DATA}.{name}")
     if value is None:
@@ -196,23 +188,6 @@ def _ed(flat: Flat, name: str) -> str | None:
     if value is None or not isinstance(value, str):
         return None
     return None if value.strip() in _NULL else value
-
-
-def _hexkey(value: str | None) -> str | None:
-    number = _int(value)
-    return None if number is None else f"0x{number:x}"
-
-
-def _describe_all(flat: Flat) -> None:
-    """Resolve ``%%NNNN`` message references in every event_data value, in place."""
-    for key, value in list(flat.items()):
-        if not key.startswith(f"{EVENT_DATA}.") or not isinstance(value, str) or "%%" not in value:
-            continue
-        tokens = [t for t in re.split(r"[\s,]+", value.strip()) if t]
-        if not tokens or not all(t.startswith("%%") for t in tokens):
-            continue
-        names = [_DESCRIPTIONS.get(t[2:], t) for t in tokens]
-        flat[key] = names[0] if len(names) == 1 else names
 
 
 def _set(flat: Flat, key: str, value: Any) -> None:
@@ -240,6 +215,11 @@ def _int(value: str | None) -> int | None:
         return int(value, 16) if value.lower().startswith("0x") else int(value)
     except ValueError:
         return None
+
+
+def _hexkey(value: str | None) -> str | None:
+    number = _int(value)
+    return None if number is None else f"0x{number:x}"
 
 
 def _ip(value: str | None) -> str | None:
@@ -276,6 +256,18 @@ def _describe(value: str | None) -> str | None:
         return None
     text = value.strip()
     return _DESCRIPTIONS.get(text[2:] if text.startswith("%%") else text, value)
+
+
+def _describe_all(flat: Flat) -> None:
+    """Resolve ``%%NNNN`` message references in every event_data value, in place."""
+    for key, value in list(flat.items()):
+        if not key.startswith(f"{EVENT_DATA}.") or not isinstance(value, str) or "%%" not in value:
+            continue
+        tokens = [t for t in re.split(r"[\s,]+", value.strip()) if t]
+        if not tokens or not all(t.startswith("%%") for t in tokens):
+            continue
+        names = [_DESCRIPTIONS.get(t[2:], t) for t in tokens]
+        flat[key] = names[0] if len(names) == 1 else names
 
 
 def _split_args(command_line: str) -> list[str]:
@@ -323,15 +315,15 @@ def _user(
     _set(flat, f"{prefix}.id", sid)
     _set(flat, f"{prefix}.name", name)
     _set(flat, f"{prefix}.domain", domain)
-    _append(flat, "related.user", name)
+    _append(flat, RELATED_USER, name)
 
 
 def _file_from_path(flat: Flat, path: str | None) -> None:
     if not path:
         return
-    _set(flat, "file.path", path)
+    _set(flat, FILE_PATH, path)
     name = _basename(path)
-    _set(flat, "file.name", name)
+    _set(flat, FILE_NAME, name)
     directory = ntpath.dirname(path.replace("/", "\\"))
     if directory:
         _set(flat, "file.directory", directory)
@@ -352,25 +344,20 @@ def _apply_event_table(flat: Flat, table: dict[str, dict], code: str | None) -> 
 # -- Security -----------------------------------------------------------------------------
 
 
-_COMPUTER_EVENTS = {"4741", "4742", "4743"}
-_KERBEROS_EVENTS = {"4768", "4769", "4770", "4771", "4772", "4773"}
-
-
-def security(flat: Flat) -> None:
-    code = flat.get("event.code")
-    _apply_event_table(flat, _SEC_EVENTS, code)
-    task = flat.get("winlog.task")
+def _security_task_and_outcome(flat: Flat, code: str | None) -> None:
+    task = flat.get(WINLOG_TASK)
     if code == "1102":
-        flat["winlog.task"] = "Log clear"
+        flat[WINLOG_TASK] = "Log clear"
     elif task in _SECURITY_TASKS:
-        flat["winlog.task"] = _SECURITY_TASKS[task]
+        flat[WINLOG_TASK] = _SECURITY_TASKS[task]
     keywords = flat.get("winlog.keywords") or []
     if "Audit Success" in keywords:
-        flat["event.outcome"] = "success"
+        flat[EVENT_OUTCOME] = "success"
     elif "Audit Failure" in keywords:
-        flat["event.outcome"] = "failure"
+        flat[EVENT_OUTCOME] = "failure"
 
-    # Coded values -> names. Raw values stay in event_data, as in Winlogbeat.
+
+def _security_logon_codes(flat: Flat, code: str | None) -> None:
     logon_type = _ed(flat, "LogonType")
     if logon_type and logon_type in _LOGON_TYPES:
         flat["winlog.logon.type"] = _LOGON_TYPES[logon_type]
@@ -378,6 +365,21 @@ def security(flat: Flat) -> None:
     if target_logon in (None, "0x0"):
         target_logon = _ed(flat, "SubjectLogonId") or target_logon
     _set(flat, "winlog.logon.id", target_logon)
+    if code not in ("4625", "4776"):
+        return
+    status = _hexkey(_ed(flat, "Status"))
+    if status and status in _LOGON_FAILURE:
+        flat["winlog.logon.failure.status"] = _LOGON_FAILURE[status]
+    sub = _hexkey(_ed(flat, "SubStatus"))
+    if sub and sub in _LOGON_FAILURE:
+        flat["winlog.logon.failure.sub_status"] = _LOGON_FAILURE[sub]
+    reason = _ed(flat, "FailureReason")
+    if reason:
+        flat["winlog.logon.failure.reason"] = _describe(reason)
+
+
+def _security_coded_values(flat: Flat, code: str | None) -> None:
+    """Coded values -> names. Raw values stay in event_data, as in Winlogbeat."""
     for field, target in (("NewUacValue", "NewUACList"), ("OldUacValue", "OldUACList")):
         names = _flags(_ed(flat, field), _UAC_FLAGS)
         if names:
@@ -391,22 +393,14 @@ def security(flat: Flat) -> None:
     status = _hexkey(_ed(flat, "Status"))
     if status and code in _KERBEROS_EVENTS and status in _KRB_STATUS:
         flat[f"{EVENT_DATA}.StatusDescription"] = _KRB_STATUS[status]
-    if code in ("4625", "4776"):
-        if status and status in _LOGON_FAILURE:
-            flat["winlog.logon.failure.status"] = _LOGON_FAILURE[status]
-        sub = _hexkey(_ed(flat, "SubStatus"))
-        if sub and sub in _LOGON_FAILURE:
-            flat["winlog.logon.failure.sub_status"] = _LOGON_FAILURE[sub]
-        reason = _ed(flat, "FailureReason")
-        if reason:
-            flat["winlog.logon.failure.reason"] = _describe(reason)
     guid = _ed(flat, "SubcategoryGuid")
-    if guid:
-        entry = _SUBCATEGORIES.get(guid.strip("{}").upper())
-        if entry:
-            flat[f"{EVENT_DATA}.SubCategory"] = entry[0] if isinstance(entry, list) else entry
-            if isinstance(entry, list) and len(entry) > 1:
-                flat[f"{EVENT_DATA}.Category"] = entry[1]
+    entry = _SUBCATEGORIES.get(guid.strip("{}").upper()) if guid else None
+    if isinstance(entry, list):
+        flat[f"{EVENT_DATA}.SubCategory"] = entry[0]
+        if len(entry) > 1:
+            flat[f"{EVENT_DATA}.Category"] = entry[1]
+    elif entry:
+        flat[f"{EVENT_DATA}.SubCategory"] = entry
     mask = _int(_ed(flat, "AccessMask"))
     if mask:
         names = [
@@ -427,14 +421,8 @@ def security(flat: Flat) -> None:
         if value and value in table:
             flat[target] = table[value]
 
-    # Accounts.
-    _user(
-        flat,
-        "user",
-        sid=_ed(flat, "SubjectUserSid"),
-        name=_ed(flat, "SubjectUserName"),
-        domain=_ed(flat, "SubjectDomainName"),
-    )
+
+def _security_target(flat: Flat, code: str | None) -> None:
     target_sid = _ed(flat, "TargetUserSid") or _ed(flat, "TargetSid")
     target_name, target_domain = _ed(flat, "TargetUserName"), _ed(flat, "TargetDomainName")
     if code in _KERBEROS_EVENTS or code == "4776":
@@ -458,35 +446,41 @@ def security(flat: Flat) -> None:
             parts = [p.strip() for p in member.split(",")]
             cn = next((p[3:] for p in parts if p.upper().startswith("CN=")), member)
             dcs = [p[3:] for p in parts if p.upper().startswith("DC=")]
-            _user(
-                flat,
-                "user.target",
-                sid=_ed(flat, "MemberSid"),
-                name=cn,
-                domain=dcs[-1] if dcs else None,
-            )
+            domain = dcs[-1] if dcs else None
+            _user(flat, "user.target", sid=_ed(flat, "MemberSid"), name=cn, domain=domain)
     elif target_name or target_sid:
         _user(flat, "user.target", sid=target_sid, name=target_name, domain=target_domain)
-        if (code in _LOGON_EVENTS and flat.get("event.outcome") != "failure") or code == "4688":
+        logged_in = code in _LOGON_EVENTS and flat.get(EVENT_OUTCOME) != "failure"
+        if logged_in or code == "4688":
             _user(flat, "user.effective", sid=target_sid, name=target_name, domain=target_domain)
+
+
+def _security_accounts(flat: Flat, code: str | None) -> None:
+    _user(
+        flat,
+        "user",
+        sid=_ed(flat, "SubjectUserSid"),
+        name=_ed(flat, "SubjectUserName"),
+        domain=_ed(flat, "SubjectDomainName"),
+    )
+    _security_target(flat, code)
     if code == "4781":
         _set(flat, "user.changes.name", _ed(flat, "NewTargetUserName"))
-        _append(flat, "related.user", _ed(flat, "NewTargetUserName"))
+        _append(flat, RELATED_USER, _ed(flat, "NewTargetUserName"))
     if _ed(flat, "AccountName"):
         _user(
             flat, "user", sid=None, name=_ed(flat, "AccountName"), domain=_ed(flat, "AccountDomain")
         )
         _set(flat, "winlog.logon.id", _ed(flat, "LogonID"))
-        _set(flat, "source.domain", _ed(flat, "ClientName"))
-        _set(flat, "source.ip", _ip(_ed(flat, "ClientAddress")))
+        _set(flat, SOURCE_DOMAIN, _ed(flat, "ClientName"))
+        _set(flat, SOURCE_IP, _ip(_ed(flat, "ClientAddress")))
+    _set(flat, SOURCE_IP, _ip(_ed(flat, "IpAddress")))
+    _set(flat, SOURCE_PORT, _int(_ed(flat, "IpPort")))
+    _set(flat, SOURCE_DOMAIN, _ed(flat, "WorkstationName"))
+    _append(flat, RELATED_IP, flat.get(SOURCE_IP))
 
-    # Network source.
-    _set(flat, "source.ip", _ip(_ed(flat, "IpAddress")))
-    _set(flat, "source.port", _int(_ed(flat, "IpPort")))
-    _set(flat, "source.domain", _ed(flat, "WorkstationName"))
-    _append(flat, "related.ip", flat.get("source.ip"))
 
-    # Processes.
+def _security_processes(flat: Flat, code: str | None) -> None:
     if code == "4688":
         _process(
             flat,
@@ -501,14 +495,14 @@ def security(flat: Flat) -> None:
             pid=_ed(flat, "ProcessId"),
             executable=_ed(flat, "ParentProcessName"),
         )
-    elif code == "4689":
-        _process(flat, "process", pid=_ed(flat, "ProcessId"), executable=_ed(flat, "ProcessName"))
+        return
+    _process(flat, "process", pid=_ed(flat, "ProcessId"), executable=_ed(flat, "ProcessName"))
+    if code == "4689":
         _set(flat, "process.exit_code", _int(_ed(flat, "Status")))
-    else:
-        _process(flat, "process", pid=_ed(flat, "ProcessId"), executable=_ed(flat, "ProcessName"))
 
-    # Services, Kerberos services, files, shares.
-    if code in ("4697", "7045"):
+
+def _security_objects(flat: Flat, code: str | None) -> None:
+    if code in _SERVICE_EVENTS:
         _set(flat, "service.name", _ed(flat, "ServiceName"))
         service_type = _hexkey(_ed(flat, "ServiceType"))
         if service_type and service_type in _SERVICE_TYPES:
@@ -516,23 +510,34 @@ def security(flat: Flat) -> None:
         _set(flat, "process.executable", _ed(flat, "ServiceFileName"))
     elif code in _KERBEROS_EVENTS:
         _set(flat, "service.name", _ed(flat, "ServiceName"))
-    if code in ("5140", "5145"):
+    if code in _SHARE_EVENTS:
         share, relative = _ed(flat, "ShareName"), _ed(flat, "RelativeTargetName")
-        _set(flat, "file.name", _basename(relative) or relative)
+        _set(flat, FILE_NAME, _basename(relative) or relative)
         directory = _ed(flat, "ShareLocalPath")
         _set(flat, "file.directory", directory)
-        if directory and flat.get("file.name"):
-            _set(flat, "file.path", f"{directory.rstrip(chr(92))}\\{flat['file.name']}")
+        if directory and flat.get(FILE_NAME):
+            _set(flat, FILE_PATH, f"{directory.rstrip(chr(92))}\\{flat[FILE_NAME]}")
         if share and relative:
             _set(flat, "file.target_path", f"{share}\\{relative}")
         elif share:
             _set(flat, "file.target_path", share)
-    elif code in ("4656", "4658", "4660", "4663", "4670", "4907"):
+    elif code in _OBJECT_EVENTS:
         object_type = _ed(flat, "ObjectType")
         if object_type == "File":
             _file_from_path(flat, _ed(flat, "ObjectName"))
         elif object_type == "Key":
-            _set(flat, "registry.path", _ed(flat, "ObjectName"))
+            _set(flat, REGISTRY_PATH, _ed(flat, "ObjectName"))
+
+
+def security(flat: Flat) -> None:
+    code = flat.get(EVENT_CODE)
+    _apply_event_table(flat, _SEC_EVENTS, code)
+    _security_task_and_outcome(flat, code)
+    _security_logon_codes(flat, code)
+    _security_coded_values(flat, code)
+    _security_accounts(flat, code)
+    _security_processes(flat, code)
+    _security_objects(flat, code)
 
 
 # -- Sysmon -------------------------------------------------------------------------------
@@ -576,7 +581,7 @@ def _registry(flat: Flat, target: str | None, *, split_value: bool) -> None:
     hive = _HIVES.get(hive_name.upper())
     if hive:
         path = f"{hive}\\{rest}" if rest else hive
-    _set(flat, "registry.path", path)
+    _set(flat, REGISTRY_PATH, path)
     _set(flat, "registry.hive", hive or hive_name)
     if not rest:
         return
@@ -586,62 +591,61 @@ def _registry(flat: Flat, target: str | None, *, split_value: bool) -> None:
         _set(flat, "registry.value", value or None)
 
 
+def _registry_data(flat: Flat, details: str | None) -> None:
+    if not details or not flat.get(REGISTRY_PATH):
+        return
+    kind, sep, rest = details.partition(" ")
+    if kind in ("DWORD", "QWORD") and sep and rest.startswith("(") and rest.endswith(")"):
+        numbers = [_int(part) for part in rest[1:-1].split("-")]
+        if all(n is not None for n in numbers):
+            value = numbers[0]
+            for low in numbers[1:]:  # QWORD is logged as (high-low)
+                value = (value << 32) | low
+            flat[REGISTRY_DATA_TYPE] = f"SZ_{kind}"
+            flat[REGISTRY_DATA_STRINGS] = [str(value)]
+            return
+    flat[REGISTRY_DATA_TYPE] = "REG_BINARY" if details == "Binary Data" else "SZ"
+    flat[REGISTRY_DATA_STRINGS] = [details]
+
+
+def _dns_answer(item: str) -> tuple[dict[str, Any] | None, str | None]:
+    """One ``QueryResults`` item -> (answer, resolved ip). Fragments give (None, None)."""
+    rtype, data = None, item
+    if item.startswith("type:"):
+        number, _, data = item[5:].strip().partition(" ")
+        rtype, data = _DNS_TYPES.get(number, number), data.strip()
+    ip = _ip(data)
+    if ip:
+        return {"data": ip, "type": rtype or ("AAAA" if ":" in ip else "A")}, ip
+    if rtype is None:
+        return None, None  # neither a typed record nor an address: a truncated fragment
+    return {"data": data, "type": rtype}, None
+
+
 def _dns_answers(flat: Flat, results: str | None) -> None:
     if not results:
         return
     answers, resolved = [], []
-    for item in results.split(";"):
-        item = item.strip()
-        if not item:
+    for raw in results.split(";"):
+        answer, ip = _dns_answer(raw.strip())
+        if answer is None:
             continue
-        rtype, data = None, item
-        match = re.match(r"^type:\s*(\d+)\s+(.*)$", item)
-        if match:
-            rtype, data = _DNS_TYPES.get(match.group(1), match.group(1)), match.group(2).strip()
-        ip = _ip(data)
+        answers.append(answer)
         if ip:
             resolved.append(ip)
-            data = ip
-            rtype = rtype or ("AAAA" if ":" in ip else "A")
-        elif rtype is None:
-            continue  # neither a typed record nor an address: a truncated fragment
+            _append(flat, RELATED_IP, ip)
         else:
-            _append(flat, "related.hosts", data.rstrip("."))
-        answer: dict[str, Any] = {"data": data}
-        if rtype:
-            answer["type"] = rtype
-        answers.append(answer)
+            _append(flat, RELATED_HOSTS, str(answer["data"]).rstrip("."))
     if answers:
         flat["dns.answers"] = answers
     if resolved:
         flat["dns.resolved_ip"] = resolved
-        for ip in resolved:
-            _append(flat, "related.ip", ip)
 
 
-def sysmon(flat: Flat) -> None:
-    code = flat.get("event.code")
-    _apply_event_table(flat, _SYS_EVENTS, code)
-    task = _SYSMON_TASKS.get(code or "")
-    if task:
-        flat["winlog.task"] = task
-        flat["event.action"] = task
-    # Sysmon records when the activity happened; the log write time stays in event.created.
-    utc_time = _ed(flat, "UtcTime")
-    if utc_time:
-        flat["@timestamp"] = utc_time
-    rule = _ed(flat, "RuleName")
-    if rule:
-        _set(flat, "rule.name", rule)
-    if code == "255":
-        _set(flat, "error.code", _ed(flat, "ID"))
-    if code == "25":
-        _set(flat, "message", _ed(flat, "Type"))
-
+def _sysmon_process(flat: Flat, code: str | None) -> None:
     hashes = _ed(flat, "Hashes") or _ed(flat, "Hash")
     is_file_event = code in ("6", "7", "15", "29")
     _hashes(flat, "file" if is_file_event else "process", hashes)
-
     _process(
         flat,
         "process",
@@ -666,91 +670,69 @@ def sysmon(flat: Flat) -> None:
     )
     _pe(flat, "file" if code == "7" else "process")
 
+
+def _sysmon_files(flat: Flat) -> None:
     target = _ed(flat, "TargetFilename") or _ed(flat, "Device") or _ed(flat, "ImageLoaded")
     _file_from_path(flat, target)
-    _set(flat, "file.name", _ed(flat, "PipeName"))
+    _set(flat, FILE_NAME, _ed(flat, "PipeName"))
     signed = _ed(flat, "Signed")
-    if signed is not None:
-        flat["file.code_signature.signed"] = signed.lower() == "true"
-        _set(flat, "file.code_signature.subject_name", _ed(flat, "Signature"))
-        status = _ed(flat, "SignatureStatus")
-        _set(flat, "file.code_signature.status", status)
-        if status is not None:
-            flat["file.code_signature.valid"] = status == "Valid"
+    if signed is None:
+        return
+    flat["file.code_signature.signed"] = signed.lower() == "true"
+    _set(flat, "file.code_signature.subject_name", _ed(flat, "Signature"))
+    status = _ed(flat, "SignatureStatus")
+    _set(flat, "file.code_signature.status", status)
+    if status is not None:
+        flat["file.code_signature.valid"] = status == "Valid"
 
-    # Network (event 3) and DNS (event 22).
+
+def _sysmon_network(flat: Flat, code: str | None) -> None:
     _set(flat, "network.transport", (_ed(flat, "Protocol") or "").lower() or None)
-    _set(flat, "source.ip", _ip(_ed(flat, "SourceIp")))
-    _set(flat, "source.port", _int(_ed(flat, "SourcePort")))
-    _set(flat, "source.domain", _ed(flat, "SourceHostname"))
-    _set(flat, "destination.ip", _ip(_ed(flat, "DestinationIp")))
+    _set(flat, SOURCE_IP, _ip(_ed(flat, "SourceIp")))
+    _set(flat, SOURCE_PORT, _int(_ed(flat, "SourcePort")))
+    _set(flat, SOURCE_DOMAIN, _ed(flat, "SourceHostname"))
+    _set(flat, DESTINATION_IP, _ip(_ed(flat, "DestinationIp")))
     _set(flat, "destination.port", _int(_ed(flat, "DestinationPort")))
     _set(flat, "destination.domain", _ed(flat, "DestinationHostname"))
     if code == "22":
         flat["network.protocol"] = "dns"
         _set(flat, "dns.question.name", _ed(flat, "QueryName"))
-        _append(flat, "related.hosts", _ed(flat, "QueryName"))
+        _append(flat, RELATED_HOSTS, _ed(flat, "QueryName"))
         _dns_answers(flat, _ed(flat, "QueryResults"))
         status = _ed(flat, "QueryStatus")
         if status is not None:
             flat["sysmon.dns.status"] = _DNS_STATUS.get(status, status)
     else:
-        _set(
-            flat,
-            "network.protocol",
-            _ed(flat, "DestinationPortName") or _ed(flat, "SourcePortName"),
-        )
+        protocol = _ed(flat, "DestinationPortName") or _ed(flat, "SourcePortName")
+        _set(flat, "network.protocol", protocol)
     initiated = _ed(flat, "Initiated")
     if initiated is not None:
         flat["network.direction"] = "egress" if initiated.lower() == "true" else "ingress"
     v6 = _ed(flat, "SourceIsIpv6")
     if v6 is not None:
         flat["network.type"] = "ipv6" if v6.lower() == "true" else "ipv4"
-    src, dst, proto = (
-        flat.get("source.ip"),
-        flat.get("destination.ip"),
-        flat.get("network.transport"),
-    )
+    src, dst = flat.get(SOURCE_IP), flat.get(DESTINATION_IP)
+    proto = flat.get("network.transport")
     if src and dst and proto:
         from evtxtoelk.community_id import community_id
 
-        cid = community_id(src, dst, proto, flat.get("source.port"), flat.get("destination.port"))
+        cid = community_id(src, dst, proto, flat.get(SOURCE_PORT), flat.get("destination.port"))
         if cid:
             flat["network.community_id"] = cid
-    _append(flat, "related.ip", flat.get("source.ip"))
-    _append(flat, "related.ip", flat.get("destination.ip"))
+    _append(flat, RELATED_IP, src)
+    _append(flat, RELATED_IP, dst)
 
-    # Registry (events 12-14).
-    event_type = _ed(flat, "EventType") or ""
-    _registry(
-        flat, _ed(flat, "TargetObject"), split_value=event_type in ("SetValue", "DeleteValue")
-    )
-    details = _ed(flat, "Details")
-    if details and flat.get("registry.path"):
-        match = re.match(r"^(DWORD|QWORD)\s*\((0x[0-9A-Fa-f]+)(?:-(0x[0-9A-Fa-f]+))?\)$", details)
-        if match:
-            number = int(match.group(2), 16)
-            if match.group(3):  # QWORD is logged as (high-low)
-                number = (number << 32) | int(match.group(3), 16)
-            flat["registry.data.type"] = f"SZ_{match.group(1)}"
-            flat["registry.data.strings"] = [str(number)]
-        elif details == "Binary Data":
-            flat["registry.data.type"] = "REG_BINARY"
-            flat["registry.data.strings"] = [details]
-        else:
-            flat["registry.data.type"] = "SZ"
-            flat["registry.data.strings"] = [details]
 
-    # User.
+def _sysmon_user(flat: Flat) -> None:
     user = _ed(flat, "User")
     if user:
         domain, sep, name = user.partition("\\")
         if sep:
             _set(flat, "user.domain", domain)
-            _set(flat, "user.name", name)
+            _set(flat, USER_NAME, name)
         else:
-            _set(flat, "user.name", user)
-        _append(flat, "related.user", flat.get("user.name"))
+            _set(flat, USER_NAME, user)
+        _append(flat, RELATED_USER, flat.get(USER_NAME))
     _set(flat, "user.id", flat.get("winlog.user.identifier"))
     for source, target in (
         ("Archived", "sysmon.file.archived"),
@@ -759,6 +741,35 @@ def sysmon(flat: Flat) -> None:
         value = _ed(flat, source)
         if value is not None:
             flat[target] = value.lower() == "true"
+
+
+def sysmon(flat: Flat) -> None:
+    code = flat.get(EVENT_CODE)
+    _apply_event_table(flat, _SYS_EVENTS, code)
+    task = _SYSMON_TASKS.get(code or "")
+    if task:
+        flat[WINLOG_TASK] = task
+        flat["event.action"] = task
+    # Sysmon records when the activity happened; the log write time stays in event.created.
+    utc_time = _ed(flat, "UtcTime")
+    if utc_time:
+        flat["@timestamp"] = utc_time
+    rule = _ed(flat, "RuleName")
+    if rule:
+        _set(flat, "rule.name", rule)
+    if code == "255":
+        _set(flat, "error.code", _ed(flat, "ID"))
+    if code == "25":
+        _set(flat, "message", _ed(flat, "Type"))
+    _sysmon_process(flat, code)
+    _sysmon_files(flat)
+    _sysmon_network(flat, code)
+    event_type = _ed(flat, "EventType") or ""
+    _registry(
+        flat, _ed(flat, "TargetObject"), split_value=event_type in ("SetValue", "DeleteValue")
+    )
+    _registry_data(flat, _ed(flat, "Details"))
+    _sysmon_user(flat)
 
 
 # -- PowerShell ---------------------------------------------------------------------------
@@ -773,70 +784,71 @@ _PS_EVENTS: dict[str, dict[str, Any]] = {
     "4105": {"category": ["process"], "type": ["start"], "action": "Starting Command"},
     "4106": {"category": ["process"], "type": ["end"], "action": "Stopping Command"},
 }
-#: ``Key=Value`` / ``Key = Value`` context lines (spaces removed from the key) -> field.
+#: ``Key=Value`` / ``Key = Value`` context lines (spaces removed, lower-cased key) -> field.
 _PS_KEYS = {
-    "NewEngineState": "powershell.engine.new_state",
-    "PreviousEngineState": "powershell.engine.previous_state",
-    "NewProviderState": "powershell.provider.new_state",
-    "ProviderName": "powershell.provider.name",
-    "SequenceNumber": "event.sequence",
-    "DetailSequence": "powershell.sequence",
-    "DetailTotal": "powershell.total",
-    "HostName": "process.title",
-    "HostVersion": "powershell.process.executable_version",
-    "HostId": "process.entity_id",
-    "HostApplication": "process.command_line",
-    "EngineVersion": "powershell.engine.version",
-    "RunspaceId": "powershell.runspace_id",
-    "PipelineId": "powershell.pipeline_id",
-    "CommandName": "powershell.command.name",
-    "CommandType": "powershell.command.type",
-    "ScriptName": "file.path",
-    "CommandPath": "powershell.command.path",
-    "CommandLine": "powershell.command.value",
-    "ShellId": "powershell.id",
-    "UserId": "user.name",
-    "User": "user.name",
-    "ConnectedUser": "powershell.connected_user.name",
+    "newenginestate": "powershell.engine.new_state",
+    "previousenginestate": "powershell.engine.previous_state",
+    "newproviderstate": "powershell.provider.new_state",
+    "providername": "powershell.provider.name",
+    "sequencenumber": "event.sequence",
+    "detailsequence": "powershell.sequence",
+    "detailtotal": "powershell.total",
+    "hostname": "process.title",
+    "hostversion": "powershell.process.executable_version",
+    "hostid": "process.entity_id",
+    "hostapplication": "process.command_line",
+    "engineversion": "powershell.engine.version",
+    "runspaceid": "powershell.runspace_id",
+    "pipelineid": "powershell.pipeline_id",
+    "commandname": "powershell.command.name",
+    "commandtype": "powershell.command.type",
+    "scriptname": FILE_PATH,
+    "commandpath": "powershell.command.path",
+    "commandline": "powershell.command.value",
+    "shellid": "powershell.id",
+    "userid": USER_NAME,
+    "user": USER_NAME,
+    "connecteduser": "powershell.connected_user.name",
 }
-_PS_LINE = re.compile(r"^\s*([A-Za-z][A-Za-z ]*?)\s*=(.*)$")
-_INVOCATION = re.compile(
-    r"^\s*(CommandInvocation|ParameterBinding|NonTerminatingError)\(([^)]*)\):\s*(.*)$"
-)
-_PARAM_BINDING = re.compile(r"name=(.*?);\s*value=(.*)$")
+_INVOCATION_KINDS = ("CommandInvocation", "ParameterBinding", "NonTerminatingError")
 
 
 def _ps_lines(text: str) -> list[str]:
-    return [line.rstrip("\r") for line in re.sub(r"</?string>", "\n", text).split("\n")]
+    unwrapped = text.replace("<string>", "\n").replace("</string>", "\n")
+    return [line.rstrip("\r") for line in unwrapped.split("\n")]
+
+
+def _ps_invocation(line: str) -> dict[str, str] | None:
+    """``CommandInvocation(Add-Type): "Add-Type"`` -> detail dict, or None."""
+    stripped = line.lstrip()
+    kind = next((k for k in _INVOCATION_KINDS if stripped.startswith(k + "(")), None)
+    if kind is None:
+        return None
+    related, sep, rest = stripped[len(kind) + 1 :].partition("):")
+    if not sep:
+        return None
+    value = rest.lstrip()
+    detail = {"type": kind, "related_command": related, "value": value}
+    if kind == "ParameterBinding" and value.startswith("name="):
+        name, sep, bound = value[5:].partition("; value=")
+        if sep:
+            detail["name"], detail["value"] = name, bound
+    return detail
 
 
 def _ps_context(text: str) -> dict[str, str]:
-    """Context block -> {key: value}; keys lose their spaces, values keep their whitespace."""
+    """Context block -> {key: value}; keys lose spaces and case, values keep their whitespace."""
     out: dict[str, str] = {}
     for line in _ps_lines(text):
-        match = _PS_LINE.match(line)
-        if match and not _INVOCATION.match(line):
-            key = match.group(1).replace(" ", "").lower()
-            value = match.group(2)
-            out.setdefault(key, value if key == "commandline" else value.lstrip(" "))
-    return out
-
-
-def _ps_invocations(text: str) -> list[dict[str, str]]:
-    details = []
-    for line in _ps_lines(text):
-        match = _INVOCATION.match(line)
-        if not match:
+        if _ps_invocation(line) is not None:
             continue
-        kind, related, value = match.groups()
-        detail = {"type": kind, "related_command": related, "value": value}
-        if kind == "ParameterBinding":
-            binding = _PARAM_BINDING.search(value)
-            if binding:
-                detail["name"] = binding.group(1)
-                detail["value"] = binding.group(2)
-        details.append(detail)
-    return details
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not key or not key.replace(" ", "").isalpha():
+            continue
+        key = key.replace(" ", "").lower()
+        out.setdefault(key, value if key == "commandline" else value.lstrip(" "))
+    return out
 
 
 def _split_user(flat: Flat, prefix: str) -> None:
@@ -846,22 +858,7 @@ def _split_user(flat: Flat, prefix: str) -> None:
         flat[f"{prefix}.domain"], flat[f"{prefix}.name"] = domain, name
 
 
-def powershell(flat: Flat) -> None:
-    code = flat.get("event.code")
-    _apply_event_table(flat, _PS_EVENTS, code)
-    if code in _PS_EVENTS:
-        flat["winlog.task"] = _PS_EVENTS[code]["action"]
-    text = "\n".join(
-        v for k, v in flat.items() if k.startswith(f"{EVENT_DATA}.") and isinstance(v, str)
-    )
-    context = _ps_context(text)
-    for key, target in _PS_KEYS.items():
-        value = context.get(key.lower())
-        if value is not None and value.strip():
-            _set(flat, target, value)
-    _set(flat, "user.id", flat.get("winlog.user.identifier"))
-    if flat.get("file.path"):
-        _file_from_path(flat, flat["file.path"])
+def _powershell_events(flat: Flat, code: str | None, text: str) -> None:
     if code == "4104":
         _set(flat, "powershell.file.script_block_text", _ed(flat, "ScriptBlockText"))
         _set(flat, "powershell.file.script_block_id", _ed(flat, "ScriptBlockId"))
@@ -872,9 +869,13 @@ def powershell(flat: Flat) -> None:
         _set(flat, "powershell.file.script_block_id", _ed(flat, "ScriptBlockId"))
         _set(flat, "powershell.runspace_id", _ed(flat, "RunspaceId"))
     if code in ("800", "4103"):
-        details = _ps_invocations(text)
+        details = [d for d in (_ps_invocation(line) for line in _ps_lines(text)) if d]
         if details:
             flat["powershell.command.invocation_details"] = details
+
+
+def _powershell_users(flat: Flat, code: str | None) -> None:
+    _set(flat, "user.id", flat.get("winlog.user.identifier"))
     _split_user(flat, "user")
     _split_user(flat, "powershell.connected_user")
     if code == "4103":
@@ -882,7 +883,26 @@ def powershell(flat: Flat) -> None:
         for prefix, source in pairs:
             for part in ("name", "domain"):
                 _set(flat, f"{prefix}.{part}", flat.get(f"{source}.{part}"))
-    _append(flat, "related.user", flat.get("user.name"))
+    _append(flat, RELATED_USER, flat.get(USER_NAME))
+
+
+def powershell(flat: Flat) -> None:
+    code = flat.get(EVENT_CODE)
+    _apply_event_table(flat, _PS_EVENTS, code)
+    if code in _PS_EVENTS:
+        flat[WINLOG_TASK] = _PS_EVENTS[code]["action"]
+    text = "\n".join(
+        v for k, v in flat.items() if k.startswith(f"{EVENT_DATA}.") and isinstance(v, str)
+    )
+    context = _ps_context(text)
+    for key, target in _PS_KEYS.items():
+        value = context.get(key)
+        if value is not None and value.strip():
+            _set(flat, target, value)
+    if flat.get(FILE_PATH):
+        _file_from_path(flat, flat[FILE_PATH])
+    _powershell_events(flat, code, text)
+    _powershell_users(flat, code)
     command_line = flat.get("process.command_line")
     if isinstance(command_line, str):
         args = command_line.split()

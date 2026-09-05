@@ -135,7 +135,8 @@ def test_ecs_load_and_query(es, es_url, index, data_dir):
     again = EvtxToElk(es, index=index, metadata={"observer.name": "lab"}).load(
         str(data_dir / "security.evtx")
     )
-    assert again.ok and _count(es, index) == 2261
+    assert again.ok
+    assert _count(es, index) == 2261
     logons = es.count(index=index, query={"term": {"event.code": "4624"}})["count"]
     assert logons > 0
     assert es.count(index=index, query={"term": {"event.action": "logged-in"}})["count"] == logons

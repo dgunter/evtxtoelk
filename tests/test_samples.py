@@ -68,7 +68,8 @@ def test_every_sample_maps_to_typed_ecs(sample):
     for xml in iter_record_xml(str(sample)):
         doc = to_ecs(xml)
         flat = _flat(doc)
-        assert flat["@timestamp"] and flat["event.code"] == flat["winlog.event_id"]
+        assert flat["@timestamp"]
+        assert flat["event.code"] == flat["winlog.event_id"]
         assert flat["ecs.version"]
         for key, value in flat.items():
             assert value is not None, key

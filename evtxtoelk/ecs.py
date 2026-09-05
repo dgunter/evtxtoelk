@@ -44,6 +44,10 @@ Flat = dict[str, Any]
 TIMESTAMP = "@timestamp"
 EVENT_DATA = "winlog.event_data"
 USER_DATA = "winlog.user_data"
+TEXT = "#text"
+NAME_ATTR = "@Name"
+WELL_KNOWN_GROUP = "Well Known Group"
+NT_AUTHORITY = "NT AUTHORITY"
 
 _LEVELS = {
     0: "information",
@@ -71,12 +75,12 @@ _KEYWORDS = {
 _KEYWORD_RESERVED = 0x8000000000000000  # set on every event; carries no meaning
 #: Well-known SIDs: (name, domain, type).
 _WELL_KNOWN_SIDS = {
-    "S-1-0-0": ("Nobody", "", "Well Known Group"),
-    "S-1-1-0": ("Everyone", "", "Well Known Group"),
-    "S-1-5-7": ("ANONYMOUS LOGON", "NT AUTHORITY", "Well Known Group"),
-    "S-1-5-18": ("SYSTEM", "NT AUTHORITY", "Well Known Group"),
-    "S-1-5-19": ("LOCAL SERVICE", "NT AUTHORITY", "Well Known Group"),
-    "S-1-5-20": ("NETWORK SERVICE", "NT AUTHORITY", "Well Known Group"),
+    "S-1-0-0": ("Nobody", "", WELL_KNOWN_GROUP),
+    "S-1-1-0": ("Everyone", "", WELL_KNOWN_GROUP),
+    "S-1-5-7": ("ANONYMOUS LOGON", NT_AUTHORITY, WELL_KNOWN_GROUP),
+    "S-1-5-18": ("SYSTEM", NT_AUTHORITY, WELL_KNOWN_GROUP),
+    "S-1-5-19": ("LOCAL SERVICE", NT_AUTHORITY, WELL_KNOWN_GROUP),
+    "S-1-5-20": ("NETWORK SERVICE", NT_AUTHORITY, WELL_KNOWN_GROUP),
     "S-1-5-32-544": ("Administrators", "BUILTIN", "Alias"),
     "S-1-5-32-545": ("Users", "BUILTIN", "Alias"),
     "S-1-5-32-546": ("Guests", "BUILTIN", "Alias"),
@@ -104,7 +108,7 @@ def _text(node: Any) -> str | None:
     if node is None:
         return None
     if isinstance(node, dict):
-        node = node.get("#text")
+        node = node.get(TEXT)
     return None if node is None else str(node)
 
 
@@ -301,35 +305,41 @@ def _decode_keywords(mask: int) -> list[str]:
     return names
 
 
+def _data_items(event_data: dict[str, Any], named: dict[str, str], unnamed: list[str]) -> None:
+    value = event_data.get("Data")
+    items = value if isinstance(value, list) else [value]
+    for item in items:
+        if isinstance(item, dict) and item.get(NAME_ATTR):
+            named[str(item[NAME_ATTR])] = _normalize_scalar(_text(item) or "")
+        else:
+            text = _text(item)
+            if text is not None:
+                unnamed.append(text)
+
+
 def _event_data_fields(event_data: Any) -> tuple[dict[str, str], list[str]]:
     """``EventData`` -> ({Name: value}, [unnamed values]). Values are strings, ``-`` kept."""
     named: dict[str, str] = {}
     unnamed: list[str] = []
-    if event_data is None or isinstance(event_data, str):
-        if isinstance(event_data, str) and event_data:
+    if isinstance(event_data, str):
+        if event_data:
             unnamed.append(event_data)
         return named, unnamed
     if not isinstance(event_data, dict):
         return named, unnamed
     for key, value in event_data.items():
-        if key == "#text" and not str(value).strip():
-            continue  # whitespace between elements
         if key == "Data":
-            items = value if isinstance(value, list) else [value]
-            for item in items:
-                if isinstance(item, dict) and item.get("@Name"):
-                    named[str(item["@Name"])] = _normalize_scalar(_text(item) or "")
-                else:
-                    text = _text(item)
-                    if text is not None:
-                        unnamed.append(text)
+            _data_items(event_data, named, unnamed)
         elif key == "Binary":
             text = _text(value)
             if text:
                 named["Binary"] = text
-        else:
-            # Provider-defined children (e.g. Sysmon writes <Data> only, but be safe).
-            text = _text(value) if not isinstance(value, dict) or "#text" in value else None
+        elif key == TEXT:
+            if str(value).strip():
+                unnamed.append(str(value))
+        elif not isinstance(value, dict) or TEXT in value:
+            # Provider-defined children (Sysmon writes <Data> only, but be safe).
+            text = _text(value)
             if text is not None:
                 named[key.lstrip("@")] = text
     return named, unnamed
@@ -337,48 +347,45 @@ def _event_data_fields(event_data: Any) -> tuple[dict[str, str], list[str]]:
 
 def _strip_xml(node: Any) -> Any:
     """xmltodict node -> plain dict/str with ``@`` attribute prefixes and ``#text`` removed."""
-    if isinstance(node, dict):
-        out: dict[str, Any] = {}
-        for key, value in node.items():
-            if key.startswith("@xmlns"):
-                continue
-            if key == "#text" and len(node) > 1 and not str(value).strip():
-                continue  # whitespace between child elements
-            name = "value" if key == "#text" else key.lstrip("@")
-            out[name] = _strip_xml(value)
-        if list(out) == ["value"]:
-            return out["value"]
-        return out
     if isinstance(node, list):
         return [_strip_xml(v) for v in node]
-    return node
+    if not isinstance(node, dict):
+        return node
+    out: dict[str, Any] = {}
+    for key, value in node.items():
+        if key.startswith("@xmlns"):
+            continue
+        if key == TEXT and len(node) > 1 and not str(value).strip():
+            continue  # whitespace between child elements
+        out["value" if key == TEXT else key.lstrip("@")] = _strip_xml(value)
+    return out["value"] if list(out) == ["value"] else out
 
 
-def _generic(event: dict[str, Any], original: str | None) -> Flat:
-    system = event.get("System") or {}
+def _route(channel: str | None, provider: str | None) -> tuple[str | None, str]:
+    for route_channel, route_provider, module, dataset in _ROUTES:
+        if channel == route_channel and route_provider in (None, provider):
+            return module, dataset
+    return None, f"windows.{_slug(channel or provider or 'unknown')}"
+
+
+def _system_fields(system: dict[str, Any]) -> Flat:
     flat: Flat = {}
     provider = system.get("Provider") or {}
     event_id = _text(system.get("EventID"))
-    stamp = None
     time_created = (system.get("TimeCreated") or {}).get("@SystemTime")
     if time_created:
         try:
             stamp = parse_system_time(time_created).isoformat()
         except ValueError:
             log.warning("unparseable TimeCreated %r", time_created)
-    if stamp:
-        flat[TIMESTAMP] = stamp
-        flat["event.created"] = stamp
-        flat["winlog.time_created"] = stamp
+        else:
+            flat[TIMESTAMP] = flat["event.created"] = flat["winlog.time_created"] = stamp
     flat["event.kind"] = "event"
-    flat["event.code"] = event_id
-    flat["event.provider"] = provider.get("@Name")
-    flat["winlog.provider_name"] = provider.get("@Name")
+    flat["event.code"] = flat["winlog.event_id"] = event_id
+    flat["event.provider"] = flat["winlog.provider_name"] = provider.get(NAME_ATTR)
     flat["winlog.provider_guid"] = _normalize_scalar(provider.get("@Guid") or "") or None
-    flat["winlog.event_id"] = event_id
     flat["winlog.channel"] = _text(system.get("Channel"))
-    flat["winlog.computer_name"] = _text(system.get("Computer"))
-    flat["host.name"] = _text(system.get("Computer"))
+    flat["winlog.computer_name"] = flat["host.name"] = _text(system.get("Computer"))
     flat["winlog.record_id"] = _text(system.get("EventRecordID"))
     flat["winlog.version"] = _text(system.get("Version"))
     level = _as_int(_text(system.get("Level")))
@@ -387,9 +394,7 @@ def _generic(event: dict[str, Any], original: str | None) -> Flat:
     opcode = _as_int(_text(system.get("Opcode")))
     if opcode is not None:
         flat["winlog.opcode"] = _OPCODES.get(opcode, str(opcode))
-    task = _text(system.get("Task"))
-    if task not in (None, ""):
-        flat["winlog.task"] = task
+    flat["winlog.task"] = _text(system.get("Task")) or None
     keywords = _as_int(_text(system.get("Keywords")))
     if keywords is not None:
         flat["winlog.keywords"] = _decode_keywords(keywords)
@@ -407,33 +412,35 @@ def _generic(event: dict[str, Any], original: str | None) -> Flat:
         known = _WELL_KNOWN_SIDS.get(sid)
         if known:
             flat["winlog.user.name"], flat["winlog.user.domain"], flat["winlog.user.type"] = known
+    return flat
 
+
+def _payload_fields(event: dict[str, Any]) -> Flat:
+    flat: Flat = {}
     named, unnamed = _event_data_fields(event.get("EventData"))
     for name, value in named.items():
         flat[f"{EVENT_DATA}.{name}"] = value
     for index, value in enumerate(unnamed, 1):
         flat[f"{EVENT_DATA}.param{index}"] = value
     user_data = event.get("UserData")
-    if isinstance(user_data, dict):
-        stripped = _strip_xml(user_data)
-        if isinstance(stripped, dict) and stripped:
-            if len(stripped) == 1 and isinstance(next(iter(stripped.values())), dict):
-                ((root_name, children),) = stripped.items()
-                stripped = {"xml_name": root_name, **children}
-            for name, value in stripped.items():
-                if isinstance(value, str):
-                    value = _normalize_scalar(value)
-                flat[f"{USER_DATA}.{name}"] = value
+    stripped = _strip_xml(user_data) if isinstance(user_data, dict) else None
+    if not isinstance(stripped, dict) or not stripped:
+        return flat
+    if len(stripped) == 1 and isinstance(next(iter(stripped.values())), dict):
+        ((root_name, children),) = stripped.items()
+        stripped = {"xml_name": root_name, **children}
+    for name, value in stripped.items():
+        flat[f"{USER_DATA}.{name}"] = _normalize_scalar(value) if isinstance(value, str) else value
+    return flat
 
-    channel, prov = flat.get("winlog.channel"), flat.get("winlog.provider_name")
-    module, dataset = None, None
-    for route_channel, route_provider, route_module, route_dataset in _ROUTES:
-        if channel == route_channel and (route_provider is None or prov == route_provider):
-            module, dataset = route_module, route_dataset
-            break
+
+def _generic(event: dict[str, Any], original: str | None) -> Flat:
+    flat = _system_fields(event.get("System") or {})
+    flat.update(_payload_fields(event))
+    module, dataset = _route(flat.get("winlog.channel"), flat.get("winlog.provider_name"))
     if module:
         flat["event.module"] = module
-    flat["event.dataset"] = dataset or f"windows.{_slug(channel or prov or 'unknown')}"
+    flat["event.dataset"] = dataset
     if original is not None:
         flat["event.original"] = original
     flat["ecs.version"] = ECS_VERSION
@@ -485,7 +492,9 @@ def document_id(doc: dict[str, Any]) -> str | None:
     parts = (winlog.get("computer_name"), winlog.get("channel"), winlog.get("record_id"))
     if not all(parts):
         return None
-    return hashlib.sha1("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()  # noqa: S324
+    # SHA-1 is a stable identifier here, not a security control.
+    digest = hashlib.sha1("|".join(str(p) for p in parts).encode("utf-8"))  # NOSONAR  # noqa: S324
+    return digest.hexdigest()
 
 
 _CONTAINER_TYPES = {"object", "nested", "flattened"}
