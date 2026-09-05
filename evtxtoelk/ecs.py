@@ -379,7 +379,7 @@ def _event_data_fields(event_data: Any) -> tuple[dict[str, str], list[str]]:
     named: dict[str, str] = {}
     unnamed: list[str] = []
     if isinstance(event_data, str):
-        if event_data:
+        if event_data.strip():  # an empty element rendered with whitespace carries nothing
             unnamed.append(event_data)
     elif isinstance(event_data, dict):
         for key, value in event_data.items():

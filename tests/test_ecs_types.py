@@ -144,6 +144,7 @@ def test_payload_item_variants():
 def test_event_data_fields_string_and_odd_inputs():
     assert ecs._event_data_fields("free text") == ({}, ["free text"])
     assert ecs._event_data_fields("") == ({}, [])
+    assert ecs._event_data_fields("\n  ") == ({}, [])
     assert ecs._event_data_fields(None) == ({}, [])
     assert ecs._event_data_fields(["a"]) == ({}, [])
     named, unnamed = ecs._event_data_fields(
