@@ -67,7 +67,7 @@ def test_make_client_user_without_password_sends_empty_password():
 def test_ensure_index_creates_when_missing():
     es = mock.Mock()
     es.indices.exists.return_value = False
-    assert ensure_index(es, "hostlogs") is True
+    assert ensure_index(es, "hostlogs", ecs=False) is True
     es.indices.create.assert_called_once_with(index="hostlogs", **INDEX_BODY)
 
 
@@ -88,11 +88,25 @@ def test_index_mapping_disables_dynamic_detection():
 def test_actions_wrap_documents_with_index_and_metadata(data_dir):
     es = mock.Mock()
     result = LoadResult()
-    tool = EvtxToElk(es, index="idx", metadata={"case": "1"})
+    tool = EvtxToElk(es, index="idx", metadata={"case": "1"}, ecs=False)
     actions = list(tool.actions(str(data_dir / "issue_38.evtx"), result))
     assert len(actions) == 1
     assert actions[0]["_index"] == "idx"
     assert actions[0]["_source"]["meta"] == {"case": "1"}
+    ecs_actions = list(
+        EvtxToElk(es, index="idx", metadata={"observer.name": "x"}).actions(
+            str(data_dir / "issue_38.evtx")
+        )
+    )
+    assert ecs_actions[0]["_source"]["event"]["code"] == "4672"
+    assert ecs_actions[0]["_source"]["observer"]["name"] == "x"
+    assert len(ecs_actions[0]["_id"]) == 40
+    assert (
+        "_id"
+        not in list(
+            EvtxToElk(es, index="idx", dedupe=False).actions(str(data_dir / "issue_38.evtx"))
+        )[0]
+    )
     assert result.skipped == 0
 
 
@@ -100,6 +114,11 @@ def test_actions_count_skipped_records(data_dir):
     result = LoadResult()
     list(EvtxToElk(mock.Mock()).actions(str(data_dir / "dns_log_malformed.evtx"), result))
     assert result.skipped == 4
+    legacy = LoadResult()
+    list(
+        EvtxToElk(mock.Mock(), ecs=False).actions(str(data_dir / "dns_log_malformed.evtx"), legacy)
+    )
+    assert legacy.skipped == 4
 
 
 def test_bulk_size_is_at_least_one():

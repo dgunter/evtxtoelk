@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.1.0 - unreleased
+
+### Changed
+
+- Documents are Elastic Common Schema by default, laid out like Winlogbeat:
+  `winlog.*` for the record itself, `event.code`, `event.provider`,
+  `host.name`, `log.level`, and, for the Security, Sysmon and PowerShell
+  channels, the `user.*`, `process.*`, `file.*`, `registry.*`, `network.*`,
+  `dns.*` and `powershell.*` fields the Winlogbeat modules derive. Field types
+  follow the ECS 9.5.0 and Winlogbeat 9.5 references and every value is
+  coerced to its declared type. `--create-index` generates the matching
+  mapping. Pass `--legacy` for the 2.0 layout (`Event.System.*`,
+  `Event.EventData.Data.*`).
+- Documents get a deterministic `_id` from host, channel and record id, so
+  reloading a file is idempotent. `--no-dedupe` restores Elasticsearch ids.
+- `--ecs-original` includes the record XML as `event.original`.
+- Sysmon `@timestamp` is the event's own `UtcTime`; the log write time is
+  `event.created`.
+
+### Added
+
+- `evtxtoelk.ecs.to_ecs()`, `ecs_index_body()`, `document_id()`;
+  `EvtxToElk(..., ecs=, original=, dedupe=)`; `ensure_index(..., ecs=)`.
+- `scripts/build_ecs_tables.py` regenerates the field-type and lookup tables
+  from the published references and the pinned Winlogbeat pipelines.
+- Fidelity tests against Winlogbeat's own golden documents for 33 Security,
+  Sysmon and PowerShell test logs, and typed-output invariants over the whole
+  EVTX-ATTACK-SAMPLES corpus.
+
+Known limits of an offline `.evtx`: no rendered `message`; keyword, opcode
+and task names only for the standard values and the Security, Sysmon and
+PowerShell providers; SIDs resolved for well-known accounts only; no
+`dns.question.registered_domain`. See `docs/design-ecs.md`.
+
 ## 2.0.0 - 2026-09-05
 
 Rewrite for current Elasticsearch and Python. The documents produced are the

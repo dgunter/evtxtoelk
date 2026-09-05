@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from elasticsearch import Elasticsearch, helpers
 
-from evtxtoelk.transform import iter_documents
+from evtxtoelk.transform import iter_documents, iter_record_xml
 
 log = logging.getLogger(__name__)
 
@@ -88,11 +88,20 @@ def make_client(
     return Elasticsearch(normalize_url(url), **kwargs)
 
 
-def ensure_index(es: Elasticsearch, index: str) -> bool:
-    """Create ``index`` with the evtxtoelk mapping if it does not exist. Returns True if created."""
+def ensure_index(es: Elasticsearch, index: str, ecs: bool = True) -> bool:
+    """Create ``index`` with the matching mapping if it does not exist. Returns True if created.
+
+    ``ecs=True`` (the default) generates the mapping from the ECS/Winlogbeat field
+    table; ``ecs=False`` applies the 2.0 mapping for the legacy layout.
+    """
     if es.indices.exists(index=index):
         return False
-    es.indices.create(index=index, **INDEX_BODY)
+    if ecs:
+        from evtxtoelk.ecs import ecs_index_body
+
+        es.indices.create(index=index, **ecs_index_body())
+    else:
+        es.indices.create(index=index, **INDEX_BODY)
     return True
 
 
@@ -120,12 +129,18 @@ class EvtxToElk:
         bulk_size: int = DEFAULT_BULK_SIZE,
         metadata: dict[str, Any] | None = None,
         max_error_samples: int = 10,
+        ecs: bool = True,
+        original: bool = False,
+        dedupe: bool = True,
     ) -> None:
         self.es = es
         self.index = index
         self.bulk_size = max(1, int(bulk_size))
         self.metadata = dict(metadata) if metadata else None
         self.max_error_samples = max_error_samples
+        self.ecs = ecs
+        self.original = original
+        self.dedupe = dedupe
 
     def actions(self, path: str, result: LoadResult | None = None) -> Iterator[dict[str, Any]]:
         """Yield bulk actions for ``path``; unreadable records are counted on ``result``."""
@@ -134,8 +149,26 @@ class EvtxToElk:
         def on_error(_offset: int, _exc: Exception) -> None:
             result.skipped += 1
 
-        for doc in iter_documents(path, self.metadata, on_error=on_error):
-            yield {"_index": self.index, "_source": doc}
+        if not self.ecs:
+            for doc in iter_documents(path, self.metadata, on_error=on_error):
+                yield {"_index": self.index, "_source": doc}
+            return
+
+        from evtxtoelk.ecs import document_id, to_ecs
+
+        for xml in iter_record_xml(path, on_error=on_error):
+            try:
+                doc = to_ecs(xml, original=self.original, meta=self.metadata)
+            except Exception as exc:  # noqa: BLE001 - one bad record must not stop the load
+                log.warning("skipping record that could not be mapped to ECS: %s", exc)
+                result.skipped += 1
+                continue
+            action: dict[str, Any] = {"_index": self.index, "_source": doc}
+            if self.dedupe:
+                doc_id = document_id(doc)
+                if doc_id:
+                    action["_id"] = doc_id
+            yield action
 
     def load(self, path: str) -> LoadResult:
         """Index every readable record of ``path`` and return counts."""
@@ -190,6 +223,6 @@ class EvtxToElk:
         """The 1.x entry point: ``EvtxToElk.evtx_to_elk("file.evtx", "localhost:9200")``."""
         es = make_client(elk_ip)
         loader = EvtxToElk(
-            es, index=elk_index, bulk_size=bulk_queue_len_threshold, metadata=metadata
+            es, index=elk_index, bulk_size=bulk_queue_len_threshold, metadata=metadata, ecs=False
         )
         return loader.load(filename)
