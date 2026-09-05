@@ -138,6 +138,14 @@ def test_backends_produce_identical_documents(data_dir):
         python = [to_ecs(x) for x in parsers.iter_record_xml(path, backend=parsers.PYTHON)]
         assert len(rust) == len(python)
         for a, b in zip(rust, python, strict=True):
-            a.get("event", {}).pop("original", None)
-            b.get("event", {}).pop("original", None)
+            _normalise_timestamps(a)
+            _normalise_timestamps(b)
             assert a == b
+
+
+def _normalise_timestamps(doc):
+    """The Rust parser truncates 100 ns ticks to microseconds; python-evtx rounded them."""
+    doc.get("event", {}).pop("original", None)
+    doc["@timestamp"] = doc["@timestamp"][:23]
+    doc["event"]["created"] = doc["event"]["created"][:23]
+    doc["winlog"]["time_created"] = doc["winlog"]["time_created"][:23]
