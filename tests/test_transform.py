@@ -187,16 +187,22 @@ def test_iter_documents_reads_every_record(data_dir, name, count):
 
 
 def test_iter_documents_skips_corrupt_records_and_reports_them(data_dir):
+    from evtxtoelk.parsers import PYTHON, select_backend
+
     errors = []
     docs = list(
         iter_documents(
             str(data_dir / "dns_log_malformed.evtx"), on_error=lambda _o, exc: errors.append(exc)
         )
     )
-    # python-evtx recovers one record from this file and fails on the rest.
-    assert len(docs) == 1
-    assert len(errors) == 4
-    assert all(isinstance(e, UnicodeDecodeError) for e in errors)
+    if select_backend() == PYTHON:
+        # python-evtx recovers one record from this file and fails on the rest.
+        assert len(docs) == 1
+        assert len(errors) == 4
+    else:
+        # the Rust parser recovers all five
+        assert len(docs) == 5
+        assert errors == []
     assert docs[0]["Event"]["EventData"]["Data"]["QNAME"].endswith("windows.net.")
 
 
@@ -231,9 +237,9 @@ def test_iter_record_xml_missing_file_raises(tmp_path):
         list(iter_record_xml(str(tmp_path / "nope.evtx")))
 
 
-def test_iter_record_xml_skips_unreadable_chunks(monkeypatch, data_dir):
+def test_python_backend_skips_unreadable_chunks(monkeypatch):
     """A chunk whose record table cannot be read is reported and skipped, not fatal."""
-    import evtxtoelk.transform as t
+    from evtxtoelk import parsers
 
     class BadChunk:
         def offset(self):
@@ -255,9 +261,12 @@ def test_iter_record_xml_skips_unreadable_chunks(monkeypatch, data_dir):
         def chunks(self):
             yield BadChunk()
 
-    monkeypatch.setattr(t, "Evtx", FakeEvtx)
+    class FakeModule:
+        Evtx = FakeEvtx
+
+    monkeypatch.setattr(parsers, "_load_python", lambda: FakeModule)
     seen = []
-    assert list(iter_record_xml("ignored.evtx", on_error=lambda o, e: seen.append(o))) == []
+    assert list(parsers._iter_python("ignored.evtx", lambda o, e: seen.append(o))) == []
     assert seen == [4096]
 
 

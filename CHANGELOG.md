@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.2.0 - 2026-09-05
+
+### Changed
+
+- Parsing is now done by the Rust-backed `evtx` package (prebuilt abi3
+  wheels for x86-64 and 64-bit ARM on Linux, macOS and Windows, CPython
+  3.10+). It parses about 140 times faster than python-evtx, which remains
+  the fallback on platforms without a wheel; the two are mutually exclusive
+  dependencies because their package names differ only by case and merge on
+  case-insensitive filesystems. `--parser` and `EVTXTOELK_PARSER` force a
+  backend. Output is identical: the Winlogbeat golden tests pass unchanged.
+- The Rust parser recovers more records from damaged files (all five in the
+  malformed DNS sample where python-evtx recovered one) and renders GUIDs
+  without braces and hex values without padding; braces are restored for
+  GUID-typed fields so documents match Winlogbeat either way.
+- Positional `EventData` values keep their slot: an empty element is an empty
+  `paramN` rather than being skipped.
+- Control characters that XML forbids are rendered as `\xHH` text.
+
 ## 2.1.1 - 2026-09-05
 
 ### Added

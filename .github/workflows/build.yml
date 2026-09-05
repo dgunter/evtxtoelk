@@ -54,6 +54,16 @@ jobs:
           EVTXTOELK_REQUIRE_ES: "1"
         run: uv run --frozen pytest -q -o addopts="" --cov=evtxtoelk --cov-report=xml:coverage.xml --cov-report=term
 
+      # The pure-Python parser is the fallback for platforms without an evtx wheel. Both
+      # packages can only coexist on a case-sensitive filesystem, so this runs on Linux only:
+      # same unit and golden tests, python-evtx forced.
+      - name: Tests with the python-evtx backend
+        env:
+          EVTXTOELK_PARSER: python
+        run: |
+          uv sync --frozen --group pure-parser
+          uv run --frozen pytest -q -m "not integration and not samples"
+
       - name: Package builds
         run: uv build
 

@@ -198,12 +198,27 @@ wheels = [
 ]
 
 [[package]]
+name = "evtx"
+version = "0.12.1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/10/8cdb3afe0f1ba5344978a550fca1d9dcbc3f9093f429bca2209552af03ee/evtx-0.12.1-cp310-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:230c7b2dd0395d6b3cdd954d66423a6ed1fabcea3bf0f151cb53cd9c3a115154", size = 2124872, upload-time = "2026-06-13T15:10:09.721Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/b6/fd36daccd36b740b233ececf89a76dbaa1979f39ca228f3caa4874c05fd5/evtx-0.12.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:6dc78b1fe6e9193e56ae00797bdd7cb79a94f10642292855ed9f696917783e31", size = 1113799, upload-time = "2026-06-13T15:10:08.62Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/cf/b0bb5dbbe746fca1135cca11b2b63ea1fe7d3a4c94447aebe1cab8b977b0/evtx-0.12.1-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1ee835a4eee6513956b37162f6ae96dbc475d361d91b6bcc89f215f89f5f94d4", size = 1055244, upload-time = "2026-06-13T15:10:07.641Z" },
+    { url = "https://files.pythonhosted.org/packages/71/71/3989029f9c82233cde390ed39f320dc6268c03f4034c74e0f171026e60e6/evtx-0.12.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:826ff391772566b1fb2605b92f3c2e66e9597e5731e8176713c60dcc91ed70b1", size = 1239910, upload-time = "2026-06-13T15:10:11.171Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/00/9ff5286ff0c8fd52ef832dfecfabefd89b4d45a3dde7b8294646fe7a0d05/evtx-0.12.1-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:4074ae24a4f8f84aaed16c54990eb0f7d4da998a1bb3b998e14bb27d4f34eca1", size = 1054146, upload-time = "2026-06-13T15:10:06.609Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/05/b488927ccbd1460e44ce5d6453b6ac611b9d935ec2c6e6a25986604a67fa/evtx-0.12.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:c891c83c328c17ae9f2128976bddec9e0d19a2d82b49c2e2a20568ba2a014b7d", size = 1084129, upload-time = "2026-06-13T15:10:12.477Z" },
+    { url = "https://files.pythonhosted.org/packages/60/52/a0a7de46fa0f71705a5d8622325855ef64ec7401f048a00f9d255f2ff03c/evtx-0.12.1-cp310-abi3-win_amd64.whl", hash = "sha256:ee0e40f0f09d10af779bafa5b058358cdd7f23e00d730afd0520dc3e4c2bfe04", size = 921736, upload-time = "2026-06-13T15:10:05.135Z" },
+]
+
+[[package]]
 name = "evtxtoelk"
-version = "2.1.1"
+version = "2.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "elasticsearch" },
-    { name = "python-evtx" },
+    { name = "evtx", marker = "platform_machine in 'x86_64 AMD64 aarch64 arm64' and platform_python_implementation == 'CPython'" },
+    { name = "python-evtx", marker = "platform_machine not in 'x86_64 AMD64 aarch64 arm64' or platform_python_implementation != 'CPython'" },
     { name = "xmltodict" },
 ]
 
@@ -213,11 +228,15 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+pure-parser = [
+    { name = "python-evtx" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "elasticsearch", specifier = ">=9.0,<10" },
-    { name = "python-evtx", specifier = ">=0.8.1" },
+    { name = "evtx", marker = "platform_machine in 'x86_64 AMD64 aarch64 arm64' and platform_python_implementation == 'CPython'", specifier = ">=0.12.1" },
+    { name = "python-evtx", marker = "platform_machine not in 'x86_64 AMD64 aarch64 arm64' or platform_python_implementation != 'CPython'", specifier = ">=0.8.1" },
     { name = "xmltodict", specifier = ">=1.0" },
 ]
 
@@ -227,6 +246,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.4" },
 ]
+pure-parser = [{ name = "python-evtx", specifier = ">=0.8.1" }]
 
 [[package]]
 name = "exceptiongroup"

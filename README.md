@@ -93,7 +93,12 @@ mapping.
 
 ## Install
 
-Requires Python 3.10 or newer and Elasticsearch 8 or 9.
+Requires Python 3.10 or newer and Elasticsearch 8 or 9. Parsing uses the
+Rust-backed [`evtx`](https://pypi.org/project/evtx/) wheels on x86-64 and
+64-bit ARM Linux, macOS (Intel and Apple Silicon) and Windows; other
+platforms get the pure-Python `python-evtx` automatically. Both produce
+identical documents, the Rust one about 140 times faster. `--parser` or
+`EVTXTOELK_PARSER=python` forces a backend.
 
 ```bash
 pip install evtxtoelk
@@ -234,6 +239,7 @@ works and returns a `LoadResult`.
 ```bash
 uv sync                          # Python 3.14 environment with dev tools
 uv run pytest                    # unit tests, no Elasticsearch needed
+uv sync --group pure-parser      # Linux only: add python-evtx to test both parser backends
 docker compose up -d --wait      # single-node Elasticsearch 9.5 on localhost:9200
 uv run pytest -m integration     # end-to-end tests against it
 docker compose down -v

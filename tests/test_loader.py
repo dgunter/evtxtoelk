@@ -111,14 +111,17 @@ def test_actions_wrap_documents_with_index_and_metadata(data_dir):
 
 
 def test_actions_count_skipped_records(data_dir):
+    from evtxtoelk.parsers import PYTHON, select_backend
+
+    expected = 4 if select_backend() == PYTHON else 0  # the Rust parser recovers every record
     result = LoadResult()
     list(EvtxToElk(mock.Mock()).actions(str(data_dir / "dns_log_malformed.evtx"), result))
-    assert result.skipped == 4
+    assert result.skipped == expected
     legacy = LoadResult()
     list(
         EvtxToElk(mock.Mock(), ecs=False).actions(str(data_dir / "dns_log_malformed.evtx"), legacy)
     )
-    assert legacy.skipped == 4
+    assert legacy.skipped == expected
 
 
 def test_bulk_size_is_at_least_one():
@@ -165,7 +168,12 @@ def test_load_many_sums_results(data_dir):
         total = EvtxToElk(es).load_many(
             [str(data_dir / "issue_38.evtx"), str(data_dir / "dns_log_malformed.evtx")]
         )
-    assert (total.indexed, total.failed, total.skipped) == (2, 0, 4)
+    from evtxtoelk.parsers import PYTHON, select_backend
+
+    if select_backend() == PYTHON:
+        assert (total.indexed, total.failed, total.skipped) == (2, 0, 4)
+    else:
+        assert (total.indexed, total.failed, total.skipped) == (6, 0, 0)
 
 
 def test_legacy_entry_point_builds_client_from_bare_host(data_dir):

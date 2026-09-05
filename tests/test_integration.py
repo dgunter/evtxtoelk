@@ -89,9 +89,14 @@ def test_load_security_log_into_dynamic_index(es, index, data_dir):
 
 
 def test_malformed_file_loads_what_it_can(es, index, data_dir):
+    from evtxtoelk.parsers import PYTHON, select_backend
+
     result = EvtxToElk(es, index=index, ecs=False).load(str(data_dir / "dns_log_malformed.evtx"))
-    assert (result.indexed, result.failed, result.skipped) == (1, 0, 4)
-    assert _count(es, index) == 1
+    if select_backend() == PYTHON:
+        assert (result.indexed, result.failed, result.skipped) == (1, 0, 4)
+    else:
+        assert (result.indexed, result.failed, result.skipped) == (5, 0, 0)
+    assert _count(es, index) == result.indexed
 
 
 def test_legacy_api_with_bare_host(es, es_url, index, data_dir):
