@@ -1,0 +1,30 @@
+# Local Elasticsearch for development and the integration tests.
+#
+#   docker compose up -d --wait
+#   uv run pytest -m integration
+#   docker compose down -v
+#
+# Security is off so the tests can talk plain HTTP on localhost. Do not reuse
+# this configuration for anything reachable from a network.
+services:
+  elasticsearch:
+    image: elastic/elasticsearch:9.5.3
+    container_name: evtxtoelk-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.ml.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  esdata:
