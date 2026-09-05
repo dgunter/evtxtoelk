@@ -583,8 +583,11 @@ def ecs_index_body() -> dict[str, Any]:
         for sub in subs:
             types.pop(f"{parent}.{sub}", None)
     prefixes = {k.rsplit(".", 1)[0] for k in types if "." in k}
+    flattened = tuple(k + "." for k, t in types.items() if t == "flattened")
     root: dict[str, Any] = {}
     for key in sorted(types, key=lambda k: (k.count("."), k)):
+        if key.startswith(flattened):
+            continue  # children of a flattened field are not mapped individually
         ftype = types[key]
         parts = key.split(".")
         node = root

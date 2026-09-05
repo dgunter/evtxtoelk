@@ -275,7 +275,8 @@ an Elasticsearch service container, then uploads coverage to
 
 ## Thanks
 
-- [Willi Ballenthin](https://github.com/williballenthin) for python-evtx, which does the hard part.
+- [Omer Ben-Amram](https://github.com/omerbenamram) for the `evtx` Rust crate and its Python wheels, which now do the parsing on most platforms.
+- [Willi Ballenthin](https://github.com/williballenthin) for python-evtx, which carried this project from 2018 and remains the pure-Python fallback.
 - [@okynos](https://github.com/okynos) for the JSON file export.
 - Marc Seitz, co-author of the original write-up.
 

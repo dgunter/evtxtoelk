@@ -19,6 +19,13 @@
   `paramN` rather than being skipped.
 - Control characters that XML forbids are rendered as `\xHH` text.
 
+### Added
+
+- Tests for the type policy, Community ID, both parser backends (including a
+  parity test where both are installed), module edge cases, error paths, and an
+  integration test that indexes every fixture module into the generated ECS
+  mapping. CI merges coverage from both backend runs.
+
 ## 2.1.1 - 2026-09-05
 
 ### Added

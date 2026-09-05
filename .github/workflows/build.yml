@@ -62,7 +62,7 @@ jobs:
           EVTXTOELK_PARSER: python
         run: |
           uv sync --frozen --group pure-parser
-          uv run --frozen pytest -q -m "not integration and not samples"
+          uv run --frozen pytest -q -m "not integration and not samples" --cov=evtxtoelk --cov-append --cov-report=xml:coverage.xml
 
       - name: Package builds
         run: uv build
