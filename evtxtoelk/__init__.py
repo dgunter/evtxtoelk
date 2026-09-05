@@ -4,7 +4,7 @@ from evtxtoelk.ecs import ecs_index_body, to_ecs
 from evtxtoelk.loader import EvtxToElk, LoadResult, ensure_index, make_client, normalize_url
 from evtxtoelk.transform import iter_documents, iter_record_xml, sanitize_key, transform_event
 
-__version__ = "2.1.1"
+__version__ = "2.2.0"
 
 __all__ = [
     "EvtxToElk",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -14,6 +15,7 @@ from elasticsearch import ApiError, TransportError
 
 from evtxtoelk import __version__
 from evtxtoelk.loader import DEFAULT_BULK_SIZE, DEFAULT_INDEX, EvtxToElk, ensure_index, make_client
+from evtxtoelk.parsers import BACKEND_ENV, select_backend
 from evtxtoelk.transform import iter_documents
 
 log = logging.getLogger(__name__)
@@ -109,6 +111,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="shorthand for --output - (JSON lines on stdout)",
+    )
+    parser.add_argument(
+        "--parser",
+        choices=["auto", "rust", "python"],
+        default=None,
+        help="evtx parser backend (default: the fastest installed; also EVTXTOELK_PARSER)",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -267,6 +275,12 @@ def _run_index(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _configure_logging(args.verbose)
+    if args.parser:
+        os.environ[BACKEND_ENV] = args.parser
+    try:
+        log.debug("evtx parser backend: %s", select_backend())
+    except (ImportError, ValueError) as exc:
+        return _fail("no usable evtx parser", exc)
     output = _export_target(args)
     if output is not None:
         return _run_export(args, output)

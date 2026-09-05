@@ -15,12 +15,11 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from typing import Any
 
 import xmltodict
-from Evtx.Evtx import Evtx
 
 log = logging.getLogger(__name__)
 
@@ -121,6 +120,12 @@ def transform_event(xml: str, metadata: dict[str, Any] | None = None) -> dict[st
     doc = xmltodict.parse(xml)
     event = doc["Event"]
     system = event["System"]
+    if not isinstance(system.get("TimeCreated"), dict):
+        raise KeyError("TimeCreated")
+    if not isinstance(system.get("EventID"), dict):
+        # 2.0 consumers index Event.System.EventID.#text; keep that shape when the
+        # parser omits an empty Qualifiers attribute.
+        system["EventID"] = {"@Qualifiers": "", "#text": system.get("EventID")}
     when = parse_system_time(system["TimeCreated"]["@SystemTime"])
     stamp = when.isoformat()
     system["TimeCreated"]["@SystemTime"] = stamp
@@ -131,31 +136,7 @@ def transform_event(xml: str, metadata: dict[str, Any] | None = None) -> dict[st
     return doc
 
 
-ErrorHook = Callable[[int, Exception], None]
-
-
-def iter_record_xml(path: str, on_error: ErrorHook | None = None) -> Iterator[str]:
-    """Yield the XML of every readable record in an .evtx file.
-
-    Corrupt chunks and records are reported through ``on_error`` (record
-    offset, exception) and skipped instead of aborting the whole file.
-    """
-    with Evtx(path) as evtx:
-        for chunk in evtx.chunks():
-            try:
-                records = list(chunk.records())
-            except Exception as exc:  # noqa: BLE001 - python-evtx raises a wide range here
-                log.warning("skipping unreadable chunk at offset %s: %s", chunk.offset(), exc)
-                if on_error:
-                    on_error(chunk.offset(), exc)
-                continue
-            for record in records:
-                try:
-                    yield record.xml()
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("skipping unreadable record at offset %s: %s", record.offset(), exc)
-                    if on_error:
-                        on_error(record.offset(), exc)
+from evtxtoelk.parsers import ErrorHook, iter_record_xml  # noqa: E402  (re-exported)
 
 
 def iter_documents(

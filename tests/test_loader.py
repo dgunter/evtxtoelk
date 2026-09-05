@@ -111,14 +111,17 @@ def test_actions_wrap_documents_with_index_and_metadata(data_dir):
 
 
 def test_actions_count_skipped_records(data_dir):
+    from evtxtoelk.parsers import PYTHON, select_backend
+
+    expected = 4 if select_backend() == PYTHON else 0  # the Rust parser recovers every record
     result = LoadResult()
     list(EvtxToElk(mock.Mock()).actions(str(data_dir / "dns_log_malformed.evtx"), result))
-    assert result.skipped == 4
+    assert result.skipped == expected
     legacy = LoadResult()
     list(
         EvtxToElk(mock.Mock(), ecs=False).actions(str(data_dir / "dns_log_malformed.evtx"), legacy)
     )
-    assert legacy.skipped == 4
+    assert legacy.skipped == expected
 
 
 def test_bulk_size_is_at_least_one():
@@ -165,7 +168,12 @@ def test_load_many_sums_results(data_dir):
         total = EvtxToElk(es).load_many(
             [str(data_dir / "issue_38.evtx"), str(data_dir / "dns_log_malformed.evtx")]
         )
-    assert (total.indexed, total.failed, total.skipped) == (2, 0, 4)
+    from evtxtoelk.parsers import PYTHON, select_backend
+
+    if select_backend() == PYTHON:
+        assert (total.indexed, total.failed, total.skipped) == (2, 0, 4)
+    else:
+        assert (total.indexed, total.failed, total.skipped) == (6, 0, 0)
 
 
 def test_legacy_entry_point_builds_client_from_bare_host(data_dir):
@@ -180,3 +188,32 @@ def test_legacy_entry_point_builds_client_from_bare_host(data_dir):
     es_cls.assert_called_once_with("http://localhost:9200", request_timeout=60)
     assert result.indexed == 1
     assert bulk.call_args.kwargs["chunk_size"] == 500
+
+
+def test_ecs_actions_count_records_that_fail_to_map(monkeypatch, data_dir):
+    from evtxtoelk import loader as loader_module
+    from evtxtoelk.ecs import to_ecs as real
+
+    calls = {"n": 0}
+
+    def flaky(xml, original=False, meta=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("boom")
+        return real(xml, original=original, meta=meta)
+
+    monkeypatch.setattr("evtxtoelk.ecs.to_ecs", flaky)
+    result = LoadResult()
+    actions = list(EvtxToElk(mock.Mock()).actions(str(data_dir / "system.evtx"), result))
+    assert result.skipped == 1
+    assert len(actions) == 1600
+    assert loader_module is not None
+
+
+def test_ensure_index_ecs_mapping_has_field_limit():
+    es = mock.Mock()
+    es.indices.exists.return_value = False
+    assert ensure_index(es, "ecs-idx") is True
+    body = es.indices.create.call_args.kwargs
+    assert body["settings"]["index.mapping.total_fields.limit"] >= 5000
+    assert body["mappings"]["properties"]["source"]["properties"]["ip"] == {"type": "ip"}

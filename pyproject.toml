@@ -1,6 +1,6 @@
 [project]
 name = "evtxtoelk"
-version = "2.1.1"
+version = "2.2.0"
 description = "Load Windows Event Log (.evtx) files into Elasticsearch."
 readme = "README.md"
 license = "Apache-2.0"
@@ -22,7 +22,13 @@ classifiers = [
     "Topic :: System :: Logging",
 ]
 dependencies = [
-    "python-evtx>=0.8.1",
+    # Exactly one evtx parser is installed per platform. The Rust-backed `evtx` wheels
+    # (abi3, CPython 3.10+) cover x86-64 and 64-bit ARM on Linux, macOS and Windows and
+    # parse ~140x faster; python-evtx is the pure-Python fallback everywhere else. The two
+    # cannot coexist: their packages differ only by case (evtx / Evtx) and merge on
+    # case-insensitive filesystems.
+    "evtx>=0.12.1; platform_python_implementation == 'CPython' and platform_machine in 'x86_64 AMD64 aarch64 arm64'",
+    "python-evtx>=0.8.1; platform_python_implementation != 'CPython' or platform_machine not in 'x86_64 AMD64 aarch64 arm64'",
     "elasticsearch>=9.0,<10",
     "xmltodict>=1.0",
 ]
@@ -35,6 +41,9 @@ Issues = "https://github.com/dgunter/evtxtoelk/issues"
 evtxtoelk = "evtxtoelk.cli:main"
 
 [dependency-groups]
+# Installs the pure-Python parser next to the Rust one so both code paths can be tested.
+# Only usable on case-sensitive filesystems (Linux CI), see the dependencies comment.
+pure-parser = ["python-evtx>=0.8.1"]
 dev = [
     "pytest>=8.2",
     "pytest-cov>=5.0",

@@ -112,6 +112,45 @@ def _text(node: Any) -> str | None:
     return None if node is None else str(node)
 
 
+def _stext(node: Any) -> str | None:
+    """Like :func:`_text` but stripped, and ``None`` for an empty element (whitespace only)."""
+    text = _text(node)
+    if text is None:
+        return None
+    text = text.strip()
+    return text or None
+
+
+def _elem(parent: dict[str, Any], name: str) -> dict[str, Any]:
+    """Child element as a dict; ``None`` or whitespace-only text (an empty element) -> ``{}``."""
+    node = parent.get(name)
+    return node if isinstance(node, dict) else {}
+
+
+_BARE_GUID = re.compile(r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
+#: event_data fields whose BinXML type is GUID. Windows renders those with braces and
+#: Winlogbeat keeps them; the Rust parser renders them bare, so braces are restored here.
+_GUID_FIELDS = frozenset(
+    {
+        "LogonGuid",
+        "TransactionId",
+        "SubcategoryGuid",
+        "ProcessGuid",
+        "ParentProcessGuid",
+        "SourceProcessGuid",
+        "SourceProcessGUID",
+        "TargetProcessGuid",
+        "TargetProcessGUID",
+    }
+)
+
+
+def _braced_guid(value: str | None) -> str | None:
+    if value and _BARE_GUID.match(value):
+        return "{" + value.upper() + "}"
+    return _normalize_scalar(value) if value else None
+
+
 def _as_int(value: Any) -> int | None:
     if isinstance(value, bool):
         return int(value)
@@ -175,12 +214,26 @@ _GUID = re.compile(
 )
 
 
+_PY_TIME = re.compile(r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(\.\d{1,6})?\+00:00$")
+_UPPER_GUID = re.compile(r"^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}$")
+
+
 def _normalize_scalar(value: str) -> str:
-    """Render values the way Winlogbeat does: minimal lowercase hex, uppercase GUIDs."""
+    """Render values the way Windows and Winlogbeat do, whichever parser produced them.
+
+    Minimal lowercase hex, uppercase GUIDs, ``true``/``false`` booleans, and
+    FILETIME values as ISO-8601 with a ``Z`` suffix.
+    """
     if _HEX.match(value):
         return f"0x{int(value, 16):x}"
     if _GUID.match(value):
         return value.upper()
+    if value in ("True", "False"):
+        return value.lower()
+    match = _PY_TIME.match(value)
+    if match:
+        fraction = (match.group(3) or ".").ljust(7, "0")
+        return f"{match.group(1)}T{match.group(2)}{fraction}Z"
     return value
 
 
@@ -310,11 +363,15 @@ def _data_items(event_data: dict[str, Any], named: dict[str, str], unnamed: list
     items = value if isinstance(value, list) else [value]
     for item in items:
         if isinstance(item, dict) and item.get(NAME_ATTR):
-            named[str(item[NAME_ATTR])] = _normalize_scalar(_text(item) or "")
+            name = str(item[NAME_ATTR])
+            text = _text(item) or ""
+            # GUID-typed values: known fields, or the Rust parser's uppercase bare rendering
+            guid_typed = name in _GUID_FIELDS or bool(_UPPER_GUID.match(text))
+            named[name] = _braced_guid(text) if guid_typed else _normalize_scalar(text)
         else:
             text = _text(item)
-            if text is not None:
-                unnamed.append(text)
+            # positional values keep their slot; an empty element is an empty string
+            unnamed.append("" if text is None or not text.strip() else text)
 
 
 def _payload_item(key: str, value: Any, named: dict[str, str], unnamed: list[str]) -> None:
@@ -338,7 +395,7 @@ def _event_data_fields(event_data: Any) -> tuple[dict[str, str], list[str]]:
     named: dict[str, str] = {}
     unnamed: list[str] = []
     if isinstance(event_data, str):
-        if event_data:
+        if event_data.strip():  # an empty element rendered with whitespace carries nothing
             unnamed.append(event_data)
     elif isinstance(event_data, dict):
         for key, value in event_data.items():
@@ -375,8 +432,8 @@ def _route(channel: str | None, provider: str | None) -> tuple[str | None, str]:
 def _system_identity(system: dict[str, Any]) -> Flat:
     """Provider, ids, host and timestamps from the ``System`` block."""
     flat: Flat = {}
-    provider = system.get("Provider") or {}
-    time_created = (system.get("TimeCreated") or {}).get("@SystemTime")
+    provider = _elem(system, "Provider")
+    time_created = _elem(system, "TimeCreated").get("@SystemTime")
     if time_created:
         try:
             stamp = parse_system_time(time_created).isoformat()
@@ -385,27 +442,27 @@ def _system_identity(system: dict[str, Any]) -> Flat:
         else:
             flat[TIMESTAMP] = flat["event.created"] = flat["winlog.time_created"] = stamp
     flat["event.kind"] = "event"
-    flat["event.code"] = flat["winlog.event_id"] = _text(system.get("EventID"))
+    flat["event.code"] = flat["winlog.event_id"] = _stext(system.get("EventID"))
     flat["event.provider"] = flat["winlog.provider_name"] = provider.get(NAME_ATTR)
-    flat["winlog.provider_guid"] = _normalize_scalar(provider.get("@Guid") or "") or None
-    flat["winlog.channel"] = _text(system.get("Channel"))
-    flat["winlog.computer_name"] = flat["host.name"] = _text(system.get("Computer"))
-    flat["winlog.record_id"] = _text(system.get("EventRecordID"))
-    flat["winlog.version"] = _text(system.get("Version"))
+    flat["winlog.provider_guid"] = _braced_guid(provider.get("@Guid"))
+    flat["winlog.channel"] = _stext(system.get("Channel"))
+    flat["winlog.computer_name"] = flat["host.name"] = _stext(system.get("Computer"))
+    flat["winlog.record_id"] = _stext(system.get("EventRecordID"))
+    flat["winlog.version"] = _stext(system.get("Version"))
     return flat
 
 
 def _system_classification(system: dict[str, Any]) -> Flat:
     """Level, opcode, task and keywords, named where the standard tables allow."""
     flat: Flat = {}
-    level = _as_int(_text(system.get("Level")))
+    level = _as_int(_stext(system.get("Level")))
     if level is not None:
         flat["log.level"] = _LEVELS.get(level, str(level))
-    opcode = _as_int(_text(system.get("Opcode")))
+    opcode = _as_int(_stext(system.get("Opcode")))
     if opcode is not None:
         flat["winlog.opcode"] = _OPCODES.get(opcode, str(opcode))
-    flat["winlog.task"] = _text(system.get("Task")) or None
-    keywords = _as_int(_text(system.get("Keywords")))
+    flat["winlog.task"] = _stext(system.get("Task")) or None
+    keywords = _as_int(_stext(system.get("Keywords")))
     if keywords is not None:
         flat["winlog.keywords"] = _decode_keywords(keywords)
     return flat
@@ -414,15 +471,13 @@ def _system_classification(system: dict[str, Any]) -> Flat:
 def _system_context(system: dict[str, Any]) -> Flat:
     """Correlation, the logging process and the logging account."""
     flat: Flat = {}
-    correlation = system.get("Correlation") or {}
-    flat["winlog.activity_id"] = _normalize_scalar(correlation.get("@ActivityID") or "") or None
-    flat["winlog.related_activity_id"] = (
-        _normalize_scalar(correlation.get("@RelatedActivityID") or "") or None
-    )
-    execution = system.get("Execution") or {}
+    correlation = _elem(system, "Correlation")
+    flat["winlog.activity_id"] = _braced_guid(correlation.get("@ActivityID"))
+    flat["winlog.related_activity_id"] = _braced_guid(correlation.get("@RelatedActivityID"))
+    execution = _elem(system, "Execution")
     flat["winlog.process.pid"] = execution.get("@ProcessID")
     flat["winlog.process.thread.id"] = execution.get("@ThreadID")
-    sid = (system.get("Security") or {}).get("@UserID") or None
+    sid = _elem(system, "Security").get("@UserID") or None
     if sid:
         flat["winlog.user.identifier"] = sid
         known = _WELL_KNOWN_SIDS.get(sid)
@@ -544,8 +599,11 @@ def ecs_index_body() -> dict[str, Any]:
         for sub in subs:
             types.pop(f"{parent}.{sub}", None)
     prefixes = {k.rsplit(".", 1)[0] for k in types if "." in k}
+    flattened = tuple(k + "." for k, t in types.items() if t == "flattened")
     root: dict[str, Any] = {}
     for key in sorted(types, key=lambda k: (k.count("."), k)):
+        if key.startswith(flattened):
+            continue  # children of a flattened field are not mapped individually
         ftype = types[key]
         parts = key.split(".")
         node = root

@@ -29,9 +29,9 @@ def index(es):
     es.indices.delete(index=name, ignore_unavailable=True)
 
 
-def _count(es: Elasticsearch, index: str) -> int:
+def _count(es: Elasticsearch, index: str, **query) -> int:
     es.indices.refresh(index=index)
-    return es.count(index=index)["count"]
+    return es.count(index=index, **query)["count"]
 
 
 def test_server_is_current_major(es):
@@ -89,9 +89,14 @@ def test_load_security_log_into_dynamic_index(es, index, data_dir):
 
 
 def test_malformed_file_loads_what_it_can(es, index, data_dir):
+    from evtxtoelk.parsers import PYTHON, select_backend
+
     result = EvtxToElk(es, index=index, ecs=False).load(str(data_dir / "dns_log_malformed.evtx"))
-    assert (result.indexed, result.failed, result.skipped) == (1, 0, 4)
-    assert _count(es, index) == 1
+    if select_backend() == PYTHON:
+        assert (result.indexed, result.failed, result.skipped) == (1, 0, 4)
+    else:
+        assert (result.indexed, result.failed, result.skipped) == (5, 0, 0)
+    assert _count(es, index) == result.indexed
 
 
 def test_legacy_api_with_bare_host(es, es_url, index, data_dir):
@@ -154,3 +159,29 @@ def test_ecs_load_and_query(es, es_url, index, data_dir):
     assert es.count(index=index, query={"range": {"winlog.process.pid": {"gt": 0}}})["count"] > 0
     rc = main([str(data_dir / "issue_38.evtx"), es_url, "-i", index])
     assert rc == 0
+
+
+def test_every_fixture_module_indexes_into_the_ecs_mapping(es, index, tmp_path):
+    """Security, Sysmon and PowerShell documents must all fit the generated mapping."""
+    import gzip
+    import pathlib
+
+    assert ensure_index(es, index) is True
+    root = pathlib.Path(__file__).parent / "data" / "winlogbeat"
+    paths = []
+    for gz in sorted(root.glob("*/*.evtx.gz")):
+        target = tmp_path / gz.name[:-3]
+        with gzip.open(gz, "rb") as fh:
+            target.write_bytes(fh.read())
+        paths.append(str(target))
+    result = EvtxToElk(es, index=index).load_many(paths)
+    assert result.failed == 0, result.errors[:3]
+    assert result.indexed > 200
+    for dataset in (
+        "system.security",
+        "windows.sysmon_operational",
+        "windows.powershell_operational",
+    ):
+        assert _count(es, index, query={"term": {"event.dataset": dataset}}) > 0
+    assert _count(es, index, query={"exists": {"field": "process.hash.sha256"}}) > 0
+    assert _count(es, index, query={"exists": {"field": "powershell.file.script_block_text"}}) > 0

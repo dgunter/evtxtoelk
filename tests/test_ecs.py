@@ -990,3 +990,151 @@ def test_security_registry_value_modified_4657():
     assert f["registry.data.type"] == "REG_SZ"
     assert f["winlog.event_data.OperationType"] == "Existing registry value modified"
     assert f["process.name"] == "regedit.exe"
+
+
+def test_security_rdp_session_events_use_account_fields():
+    f = flat(
+        to_ecs(
+            record(
+                event_id="4778",
+                task="12551",
+                data={
+                    "AccountName": "alice",
+                    "AccountDomain": "EXAMPLE",
+                    "LogonID": "0x1414c8",
+                    "SessionName": "RDP-Tcp#3",
+                    "ClientName": "LAPTOP7",
+                    "ClientAddress": "10.0.0.7",
+                },
+            )
+        )
+    )
+    assert f["user.name"] == "alice"
+    assert f["user.domain"] == "EXAMPLE"
+    assert f["winlog.logon.id"] == "0x1414c8"
+    assert f["source.domain"] == "LAPTOP7"
+    assert f["source.ip"] == "10.0.0.7"
+    assert f["related.ip"] == ["10.0.0.7"]
+    assert f["event.action"] == "session-reconnected"
+
+
+def test_security_process_exit_and_share_without_target():
+    f = flat(
+        to_ecs(
+            record(
+                event_id="4689",
+                data={
+                    "ProcessId": "0x1fc",
+                    "ProcessName": "C:\\Windows\\notepad.exe",
+                    "Status": "0x0",
+                },
+            )
+        )
+    )
+    assert f["process.exit_code"] == 0
+    assert f["process.name"] == "notepad.exe"
+    assert f["event.action"] == "exited-process"
+    g = flat(
+        to_ecs(
+            record(
+                event_id="5140",
+                data={"ShareName": "\\\\*\\IPC$", "ShareLocalPath": "", "RelativeTargetName": ""},
+            )
+        )
+    )
+    assert g["file.target_path"] == "\\\\*\\IPC$"
+    assert "file.name" not in g
+
+
+def test_security_trust_and_subcategory_shapes(monkeypatch):
+    from evtxtoelk import ecs_modules
+
+    f = flat(
+        to_ecs(
+            record(
+                event_id="4706",
+                data={
+                    "DomainName": "corp.example",
+                    "DomainSid": "S-1-5-21-1",
+                    "TdoType": "2",
+                    "TdoDirection": "3",
+                    "TdoAttributes": "8",
+                },
+            )
+        )
+    )
+    assert f["winlog.trustType"] and f["winlog.trustDirection"] and f["winlog.trustAttribute"]
+    assert f["event.action"] == "domain-trust-added"
+    monkeypatch.setitem(
+        ecs_modules._SUBCATEGORIES, "0CCE9210-69AE-11D9-BED3-505054503030", "Security State Change"
+    )
+    g = flat(
+        to_ecs(
+            record(
+                event_id="4719",
+                data={
+                    "SubcategoryGuid": "{0CCE9210-69AE-11D9-BED3-505054503030}",
+                    "AuditPolicyChanges": "%%8448",
+                },
+            )
+        )
+    )
+    assert g["winlog.event_data.SubCategory"] == "Security State Change"
+    assert "winlog.event_data.Category" not in g
+    assert ecs_modules._describe(None) is None
+    assert ecs_modules._describe("%%999999") == "%%999999"  # unknown reference kept
+
+
+def test_sysmon_edge_cases():
+    f = flat(
+        to_ecs(
+            sysmon(
+                "1",
+                {
+                    "Image": "C:\\x.exe",
+                    "ProcessId": "7",
+                    "User": "localuser",
+                    "Hashes": "SHA256=,MD5=abc,BOGUS",
+                },
+            )
+        )
+    )
+    assert f["user.name"] == "localuser"
+    assert "user.domain" not in f
+    assert f["process.hash.md5"] == "abc"
+    assert "process.hash.sha256" not in f
+    r = flat(
+        to_ecs(
+            sysmon(
+                "12",
+                {
+                    "EventType": "CreateKey",
+                    "TargetObject": "HKLM",
+                    "Image": "C:\\x.exe",
+                    "ProcessId": "7",
+                },
+            )
+        )
+    )
+    assert r["registry.path"] == "HKLM"
+    assert r["registry.hive"] == "HKLM"
+    assert "registry.key" not in r
+
+
+def test_powershell_malformed_invocation_lines_are_ignored():
+    from evtxtoelk import ecs_modules
+
+    assert ecs_modules._ps_invocation("CommandInvocation without close") is None
+    assert ecs_modules._ps_invocation("NothingHere") is None
+    detail = ecs_modules._ps_invocation('ParameterBinding(Get-Item): name="Path"; value="C:\\x"')
+    assert detail == {
+        "type": "ParameterBinding",
+        "related_command": "Get-Item",
+        "name": '"Path"',
+        "value": '"C:\\x"',
+    }
+    assert ecs_modules._ps_invocation("ParameterBinding(Get-Item): name only") == {
+        "type": "ParameterBinding",
+        "related_command": "Get-Item",
+        "value": "name only",
+    }

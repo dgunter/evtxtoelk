@@ -57,3 +57,30 @@ def test_loader_flags_reach_the_loader(data_dir):
         assert init.call_args.kwargs["dedupe"] is False
         assert init.call_args.kwargs["original"] is True
         ensure.assert_called_once_with(es, "hostlogs", ecs=False)
+
+
+def test_export_skips_records_that_fail_to_map(monkeypatch, capsys, data_dir, caplog):
+    from evtxtoelk.ecs import to_ecs as real
+
+    calls = {"n": 0}
+
+    def flaky(xml, original=False, meta=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("boom")
+        return real(xml, original=original, meta=meta)
+
+    monkeypatch.setattr("evtxtoelk.ecs.to_ecs", flaky)
+    assert cli.main([str(data_dir / "system.evtx"), "-"]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 1600
+    assert "could not be mapped" in caplog.text
+
+
+def test_parser_flag_and_missing_parser(monkeypatch, data_dir, caplog):
+    from evtxtoelk import parsers
+
+    monkeypatch.delenv(parsers.BACKEND_ENV, raising=False)
+    assert cli.main([str(data_dir / "issue_38.evtx"), "-", "--parser", "auto"]) == 0
+    monkeypatch.setattr(parsers, "available_backends", lambda: [])
+    assert cli.main([str(data_dir / "issue_38.evtx"), "-", "--parser", "rust"]) == 1
+    assert "no usable evtx parser" in caplog.text
