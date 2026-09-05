@@ -1,6 +1,6 @@
 # Design: Elastic Common Schema output for evtxtoelk
 
-Status: proposal, September 2026. Nothing here is implemented yet.
+Status: accepted 5 September 2026; implementation in progress from phase 1.
 
 ## Goal
 
@@ -95,7 +95,7 @@ Applied to every event regardless of provider. Types are the published ones.
 | Target | Type | Source | Conversion |
 | --- | --- | --- | --- |
 | `@timestamp` | date | `TimeCreated/@SystemTime` | ISO-8601 UTC; microseconds kept |
-| `event.created` | date | same | Winlogbeat sets it to the read time; offline the event time is the honest value |
+| `event.created` | date | same | Winlogbeat sets it to the read time; offline the event time is the closest value, and dashboards expect the field |
 | `event.kind` | keyword | constant `event` | `alert` for Defender detections is a module decision, not generic |
 | `event.code` | keyword | `EventID/#text` | string, never a number |
 | `event.provider` | keyword | `Provider/@Name` | |
@@ -243,12 +243,17 @@ idempotent; opt-out with `--no-dedupe`.
 
 ## Interfaces
 
-- CLI: `--ecs` on the load path and on the JSON export (`--output`,
-  `--dry-run`); `--ecs-original` to include `event.original`;
-  `--create-index` honours `--ecs`.
-- API: `to_ecs(record_xml_or_dict, original=False) -> dict`,
-  `ecs_index_body()`, `EvtxToElk(..., ecs=True)`.
-- The current layout stays the default in 2.x; 3.0 flips the default.
+- ECS is the default layout from 2.1. `--legacy` keeps the 2.0 document
+  shape (`Event.System.*`, `Event.EventData.Data.*`) for existing dashboards;
+  `--ecs-original` adds `event.original`; `--create-index` builds the mapping
+  for whichever layout is in effect; `--no-dedupe` disables the deterministic
+  `_id`.
+- API: `to_ecs(xml, original=False) -> dict`, `ecs_index_body()`,
+  `EvtxToElk(..., ecs=True)` with `ecs=False` selecting the legacy layout.
+  `transform_event()` and `iter_documents()` keep producing the legacy shape
+  so 2.0 callers are unaffected.
+- Version 2.1.0. CHANGELOG calls out the default change and the `--legacy`
+  flag.
 
 ## Testing
 
@@ -281,11 +286,10 @@ idempotent; opt-out with `--no-dedupe`.
 Phases 1 and 2 are roughly the size of the ParseZeekLogs ECS work; 3 and 4
 together about the same again.
 
-## Open questions
+## Decisions
 
-- Keep `event.created` equal to `@timestamp`, or omit it? Winlogbeat's value
-  is the read time, which has no offline equivalent. Proposal: omit.
-- Should `--ecs` become the default in 2.1 rather than waiting for 3.0? The
-  current layout has users with dashboards built on it.
-- Include `winlog.event_data.*` at all for Sysmon, whose values are fully
-  promoted to ECS? Winlogbeat keeps them; proposal: keep, for parity.
+- `event.created` is kept and equals `@timestamp`, for dashboard
+  friendliness.
+- ECS is the default in 2.1, with `--legacy` for the 2.0 layout.
+- `winlog.event_data.*` is always emitted, including for Sysmon events whose
+  values are fully promoted to ECS fields, matching Winlogbeat.
