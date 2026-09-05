@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0 (unreleased)
+## 2.0.0 - 2026-09-05
 
 Rewrite for current Elasticsearch and Python. The documents produced are the
 same shape as 1.x with the corrections listed under "Changed".

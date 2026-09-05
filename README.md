@@ -168,6 +168,13 @@ uv run pytest -m samples
 
 Lint and format with `uv run ruff check .` and `uv run ruff format .`.
 
+### Releasing
+
+Bump `version` in `pyproject.toml` and `__version__` in `evtxtoelk/__init__.py`,
+note the release in `CHANGELOG.md`, merge, then publish a GitHub release whose
+tag is `v<version>`. The Release workflow rebuilds, checks the tag against the
+package version, and publishes to PyPI through trusted publishing.
+
 CI runs the unit and integration tests on every push and pull request against
 an Elasticsearch service container, then uploads coverage to
 [SonarCloud](https://sonarcloud.io/project/overview?id=dgunter_evtxtoelk).

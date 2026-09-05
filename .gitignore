@@ -27,6 +27,9 @@ htmlcov/
 # SonarCloud scanner
 .scannerwork/
 
+# Claude Code worktrees created inside the repo
+.claude/worktrees/
+
 # IDE / OS
 .idea/
 .vscode/
