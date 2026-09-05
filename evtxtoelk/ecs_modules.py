@@ -36,6 +36,8 @@ SOURCE_IP = "source.ip"
 SOURCE_PORT = "source.port"
 SOURCE_DOMAIN = "source.domain"
 DESTINATION_IP = "destination.ip"
+DESTINATION_PORT = "destination.port"
+NETWORK_TRANSPORT = "network.transport"
 FILE_PATH = "file.path"
 FILE_NAME = "file.name"
 REGISTRY_PATH = "registry.path"
@@ -635,10 +637,10 @@ def _security_wfp(flat: Flat, code: str | None) -> None:
     _set(flat, SOURCE_IP, _ip(_ed(flat, "SourceAddress")))
     _set(flat, SOURCE_PORT, _int(_ed(flat, "SourcePort")))
     _set(flat, DESTINATION_IP, _ip(_ed(flat, "DestAddress")))
-    _set(flat, "destination.port", _int(_ed(flat, "DestPort")))
+    _set(flat, DESTINATION_PORT, _int(_ed(flat, "DestPort")))
     protocol = _int(_ed(flat, "Protocol"))
     if protocol is not None:
-        _set(flat, "network.transport", _IP_PROTOCOLS.get(protocol, str(protocol)))
+        _set(flat, NETWORK_TRANSPORT, _IP_PROTOCOLS.get(protocol, str(protocol)))
         _set(flat, "network.iana_number", str(protocol))
     direction = flat.get(f"{EVENT_DATA}.Direction")
     if isinstance(direction, str) and direction.lower() in ("inbound", "outbound"):
@@ -830,11 +832,11 @@ def _sysmon_flow(flat: Flat) -> None:
     if v6 is not None:
         flat["network.type"] = "ipv6" if v6.lower() == "true" else "ipv4"
     src, dst = flat.get(SOURCE_IP), flat.get(DESTINATION_IP)
-    proto = flat.get("network.transport")
+    proto = flat.get(NETWORK_TRANSPORT)
     if src and dst and proto:
         from evtxtoelk.community_id import community_id
 
-        cid = community_id(src, dst, proto, flat.get(SOURCE_PORT), flat.get("destination.port"))
+        cid = community_id(src, dst, proto, flat.get(SOURCE_PORT), flat.get(DESTINATION_PORT))
         if cid:
             flat["network.community_id"] = cid
     _append(flat, RELATED_IP, src)
@@ -842,12 +844,12 @@ def _sysmon_flow(flat: Flat) -> None:
 
 
 def _sysmon_network(flat: Flat, code: str | None) -> None:
-    _set(flat, "network.transport", (_ed(flat, "Protocol") or "").lower() or None)
+    _set(flat, NETWORK_TRANSPORT, (_ed(flat, "Protocol") or "").lower() or None)
     _set(flat, SOURCE_IP, _ip(_ed(flat, "SourceIp")))
     _set(flat, SOURCE_PORT, _int(_ed(flat, "SourcePort")))
     _set(flat, SOURCE_DOMAIN, _ed(flat, "SourceHostname"))
     _set(flat, DESTINATION_IP, _ip(_ed(flat, "DestinationIp")))
-    _set(flat, "destination.port", _int(_ed(flat, "DestinationPort")))
+    _set(flat, DESTINATION_PORT, _int(_ed(flat, "DestinationPort")))
     _set(flat, "destination.domain", _ed(flat, "DestinationHostname"))
     if code == "22":
         _sysmon_dns(flat)
