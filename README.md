@@ -3,14 +3,71 @@
 Load Windows Event Log (`.evtx`) files into Elasticsearch, or export them as
 JSON lines for any other collector.
 
+[![PyPI](https://img.shields.io/pypi/v/evtxtoelk)](https://pypi.org/project/evtxtoelk/)
 [![Build](https://github.com/dgunter/evtxtoelk/actions/workflows/build.yml/badge.svg)](https://github.com/dgunter/evtxtoelk/actions/workflows/build.yml)
 [![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=dgunter_evtxtoelk&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=dgunter_evtxtoelk)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=dgunter_evtxtoelk&metric=coverage)](https://sonarcloud.io/summary/new_code?id=dgunter_evtxtoelk)
+
+```bash
+pip install evtxtoelk
+evtxtoelk Security.evtx System.evtx http://localhost:9200 --create-index
+```
 
 Every record becomes one document with the event's `TimeCreated` as
 `@timestamp`, the full `Event` structure, and `EventData` collapsed into a
 searchable `{Name: value}` object. Corrupt records are skipped and counted
 instead of aborting the load.
+
+## Why this exists
+
+EvtxToElk was written in 2018 on a threat hunt with a problem that will sound
+familiar: a site with almost no internet bandwidth, laptops as the only
+approved hardware, and five or six gigabytes of Windows Event Logs handed over
+as `.evtx` files. Streaming tools were no use offline, and nobody was going to
+read that much by hand. The fix was a small Python module that took the XML
+[python-evtx](https://github.com/williballenthin/python-evtx) produces,
+turned it into dictionaries with `xmltodict`, reshaped them to fit
+Elasticsearch, and bulk-loaded them into a fresh ELK stack running on a
+laptop. Kibana did the rest. Most of the code was the reshaping.
+
+That module shipped as version 1.0 and was written up on the Dragos blog. The
+post is gone from dragos.com, so it is preserved here as
+[docs/blog-2018-evtxtoelk.md](docs/blog-2018-evtxtoelk.md), screenshots and
+all, with notes on what changed. Version 2.0 is the same idea rebuilt for
+Elasticsearch 8 and 9: a proper package with a command-line tool,
+authentication and TLS options, a mapping that keeps field types stable, a
+JSON-lines export, and a test suite that runs the loader over several hundred
+real-world logs.
+
+## What you get in Elasticsearch
+
+A `Security.evtx` logon event comes out like this. Event IDs, users, logon
+types and every other `EventData` value are individual fields you can filter,
+aggregate and visualise in Kibana:
+
+```json
+{
+  "@timestamp": "2016-07-08T18:12:51.681641+00:00",
+  "Event": {
+    "System": {
+      "Provider": {"@Name": "Microsoft-Windows-Security-Auditing"},
+      "EventID": {"@Qualifiers": "", "#text": "4624"},
+      "TimeCreated": {"@SystemTime": "2016-07-08T18:12:51.681641+00:00"},
+      "Channel": "Security",
+      "Computer": "WKS01"
+    },
+    "EventData": {
+      "Data": {"SubjectUserName": "alice", "LogonType": "2", "IpAddress": "10.0.0.7"}
+    }
+  },
+  "meta": {"case": "1234"}
+}
+```
+
+In Kibana, create a data view for `hostlogs*` with `@timestamp` as the time
+field. A pie chart of `Event.System.EventID.#text` and a table of
+`Event.EventData.Data.SubjectUserName` are the usual first two visualisations
+on a new dataset; the original post walks through both.
 
 ## Install
 
@@ -179,13 +236,17 @@ CI runs the unit and integration tests on every push and pull request against
 an Elasticsearch service container, then uploads coverage to
 [SonarCloud](https://sonarcloud.io/project/overview?id=dgunter_evtxtoelk).
 
-## History
+## Further reading
 
-The original 2018 write-up, *EvtxToElk: a Python module to load Windows Event
-Logs into Elasticsearch*, was published on the Dragos blog. Dragos has since
-removed it; an archived copy is on the
-[Wayback Machine](https://web.archive.org/web/20250812132436/https://www.dragos.com/blog/industry-news/evtxtoelk-a-python-module-to-load-windows-event-logs-into-elasticsearch/).
-See [CHANGELOG.md](CHANGELOG.md) for what changed in 2.0.
+- [EvtxToElk: a Python module to load Windows Event Logs into Elasticsearch](docs/blog-2018-evtxtoelk.md), the July 2018 write-up by Dan Gunter and Marc Seitz, recovered from the [Wayback Machine](https://web.archive.org/web/20250812132436/https://www.dragos.com/blog/industry-news/evtxtoelk-a-python-module-to-load-windows-event-logs-into-elasticsearch/) after Dragos removed it.
+- [CHANGELOG.md](CHANGELOG.md) for everything that changed in 2.0.
+- Sample logs for trying it out: [EVTX-ATTACK-SAMPLES](https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES) and the [python-evtx test data](https://github.com/williballenthin/python-evtx/tree/master/tests/data).
+
+## Thanks
+
+- [Willi Ballenthin](https://github.com/williballenthin) for python-evtx, which does the hard part.
+- [@okynos](https://github.com/okynos) for the JSON file export.
+- Marc Seitz, co-author of the original write-up.
 
 ## License
 
