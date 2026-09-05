@@ -43,24 +43,26 @@ real-world logs.
 
 Since 2.1 the documents follow Elastic Common Schema, in the layout Winlogbeat
 uses, so Elastic's prebuilt Windows detection rules, the Security app and ECS
-dashboards work on them directly. A Security 4688 process-creation event comes
-out like this (event data trimmed):
+dashboards work on them directly. A Security 4624 logon event comes out like
+this (event data trimmed):
 
 ```json
 {
-  "@timestamp": "2019-02-13T18:01:47.562412+00:00",
-  "event": {"kind": "event", "code": "4688", "provider": "Microsoft-Windows-Security-Auditing",
-            "module": "security", "dataset": "system.security", "action": "created-process",
-            "category": ["process"], "type": ["start"], "outcome": "success"},
+  "@timestamp": "2019-02-13T18:02:04.426662+00:00",
+  "event": {"kind": "event", "code": "4624", "provider": "Microsoft-Windows-Security-Auditing",
+            "module": "security", "dataset": "system.security", "action": "logged-in",
+            "category": ["authentication"], "type": ["start"], "outcome": "success"},
   "host": {"name": "PC01.example.corp"},
-  "user": {"id": "S-1-5-18", "name": "PC01$", "domain": "EXAMPLE"},
-  "process": {"pid": 508, "executable": "C:\\Windows\\System32\\TSTheme.exe", "name": "TSTheme.exe",
-              "parent": {"pid": 632}},
-  "related": {"user": ["PC01$"]},
-  "winlog": {"channel": "Security", "event_id": "4688", "record_id": "227695", "task": "Process Creation",
-             "keywords": ["Audit Success"], "logon": {"id": "0x3e7"},
-             "event_data": {"NewProcessId": "0x1fc", "NewProcessName": "C:\\Windows\\System32\\TSTheme.exe",
-                            "SubjectUserName": "PC01$", "TokenElevationType": "TokenElevationTypeFull (2)"}},
+  "user": {"id": "S-1-5-18", "name": "PC01$", "domain": "EXAMPLE",
+           "target": {"id": "S-1-5-21-1587066498-1489273250-1035260531-1106", "name": "user01", "domain": "EXAMPLE"},
+           "effective": {"id": "S-1-5-21-1587066498-1489273250-1035260531-1106", "name": "user01", "domain": "EXAMPLE"}},
+  "source": {"ip": "127.0.0.1", "domain": "PC01"},
+  "process": {"pid": 1796, "executable": "C:\\Windows\\System32\\winlogon.exe", "name": "winlogon.exe"},
+  "related": {"ip": ["127.0.0.1"], "user": ["PC01$", "user01"]},
+  "winlog": {"channel": "Security", "event_id": "4624", "record_id": "227701", "task": "Logon",
+             "keywords": ["Audit Success"], "logon": {"id": "0x1414c8", "type": "CachedInteractive"},
+             "event_data": {"LogonType": "11", "TargetUserName": "user01", "IpAddress": "127.0.0.1",
+                            "AuthenticationPackageName": "Negotiate", "LmPackageName": "-"}},
   "ecs": {"version": "9.5.0"}
 }
 ```
@@ -72,7 +74,10 @@ what the Winlogbeat modules derive: logon types and failure reasons, target
 and effective users, process and parent process with command lines, file
 hashes and code signatures, registry keys and values, network connections
 with Community ID, DNS answers, and PowerShell script blocks and command
-invocations. Field names and types come from the published ECS 9.5.0 and
+invocations. A few events Winlogbeat leaves alone are mapped too because
+they fit directly: Filtering Platform connections (5156 and friends) to
+`source.*`, `destination.*` and `network.*`, registry value changes (4657)
+to `registry.*`, and object access (4663) categorised as file or registry. Field names and types come from the published ECS 9.5.0 and
 Winlogbeat 9.5 references, every value is coerced to its declared type, and
 `--create-index` builds the matching mapping. The output is checked against
 Winlogbeat's own golden documents in the test suite.

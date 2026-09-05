@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.1.1 - 2026-09-05
+
+### Added
+
+- ECS fields for events Winlogbeat leaves untouched but that fit directly:
+  Windows Filtering Platform events 5150-5159 (`source.*`,
+  `destination.*`, `network.transport`, `network.iana_number`,
+  `network.direction`, the process, `rule.id`, and connection
+  allowed/denied categorisation), registry value changes 4657
+  (`registry.path`, `registry.value`, `registry.data.*`), and object access
+  events 4656/4658/4660/4663 categorised as file or registry access.
+
+### Changed
+
+- Internal: the field-decoding helpers were split further for readability.
+
 ## 2.1.0 - 2026-09-05
 
 ### Changed

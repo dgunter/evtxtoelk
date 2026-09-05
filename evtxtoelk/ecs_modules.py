@@ -36,6 +36,8 @@ SOURCE_IP = "source.ip"
 SOURCE_PORT = "source.port"
 SOURCE_DOMAIN = "source.domain"
 DESTINATION_IP = "destination.ip"
+DESTINATION_PORT = "destination.port"
+NETWORK_TRANSPORT = "network.transport"
 FILE_PATH = "file.path"
 FILE_NAME = "file.name"
 REGISTRY_PATH = "registry.path"
@@ -44,7 +46,56 @@ REGISTRY_DATA_STRINGS = "registry.data.strings"
 
 _SEC = PIPELINE_TABLES.get("security", {})
 _SYS = PIPELINE_TABLES.get("sysmon", {})
-_SEC_EVENTS = _SEC.get("events", {})
+#: Windows Filtering Platform events are not categorised by Winlogbeat; these follow
+#: the ECS allowed values the way its firewall integrations do.
+_WFP_CATEGORIES: dict[str, dict[str, Any]] = {
+    "5150": {
+        "category": ["network"],
+        "type": ["connection", "denied"],
+        "action": "packet-blocked-by-filter-driver",
+    },
+    "5151": {
+        "category": ["network"],
+        "type": ["connection", "denied"],
+        "action": "packet-blocked-by-filter-driver",
+    },
+    "5152": {"category": ["network"], "type": ["connection", "denied"], "action": "packet-dropped"},
+    "5153": {
+        "category": ["network"],
+        "type": ["connection", "denied"],
+        "action": "packet-blocked-by-filter",
+    },
+    "5154": {
+        "category": ["network"],
+        "type": ["connection", "allowed"],
+        "action": "listen-permitted",
+    },
+    "5155": {"category": ["network"], "type": ["connection", "denied"], "action": "listen-blocked"},
+    "5156": {
+        "category": ["network"],
+        "type": ["connection", "allowed"],
+        "action": "connection-permitted",
+    },
+    "5157": {
+        "category": ["network"],
+        "type": ["connection", "denied"],
+        "action": "connection-blocked",
+    },
+    "5158": {
+        "category": ["network"],
+        "type": ["connection", "allowed"],
+        "action": "bind-permitted",
+    },
+    "5159": {"category": ["network"], "type": ["connection", "denied"], "action": "bind-blocked"},
+}
+_SEC_EVENTS = {**_WFP_CATEGORIES, **_SEC.get("events", {})}
+_OBJECT_CATEGORIES = {"File": "file", "Key": "registry"}
+_OBJECT_ACTIONS = {
+    "4656": "object-handle-requested",
+    "4658": "object-handle-closed",
+    "4660": "object-deleted",
+    "4663": "object-access-attempted",
+}
 _SYS_EVENTS = _SYS.get("events", {})
 _LOGON_TYPES = _SEC.get("LogonType", {})
 _UAC_FLAGS = _SEC.get("NewUacValue", {})
@@ -378,8 +429,8 @@ def _security_logon_codes(flat: Flat, code: str | None) -> None:
         flat["winlog.logon.failure.reason"] = _describe(reason)
 
 
-def _security_coded_values(flat: Flat, code: str | None) -> None:
-    """Coded values -> names. Raw values stay in event_data, as in Winlogbeat."""
+def _security_flags(flat: Flat, code: str | None) -> None:
+    """Bitmask and enumeration values -> their names, alongside the raw values."""
     for field, target in (("NewUacValue", "NewUACList"), ("OldUacValue", "OldUACList")):
         names = _flags(_ed(flat, field), _UAC_FLAGS)
         if names:
@@ -393,6 +444,17 @@ def _security_coded_values(flat: Flat, code: str | None) -> None:
     status = _hexkey(_ed(flat, "Status"))
     if status and code in _KERBEROS_EVENTS and status in _KRB_STATUS:
         flat[f"{EVENT_DATA}.StatusDescription"] = _KRB_STATUS[status]
+    mask = _int(_ed(flat, "AccessMask"))
+    if mask:
+        names = [
+            name for code_, name in _ACCESS_MASKS.items() if _int(code_) and mask & _int(code_)
+        ]
+        if names:
+            flat[f"{EVENT_DATA}.AccessMaskDescription"] = names
+
+
+def _security_policy_values(flat: Flat) -> None:
+    """Audit subcategories, %% message references, privilege lists and trust attributes."""
     guid = _ed(flat, "SubcategoryGuid")
     entry = _SUBCATEGORIES.get(guid.strip("{}").upper()) if guid else None
     if isinstance(entry, list):
@@ -401,13 +463,6 @@ def _security_coded_values(flat: Flat, code: str | None) -> None:
             flat[f"{EVENT_DATA}.Category"] = entry[1]
     elif entry:
         flat[f"{EVENT_DATA}.SubCategory"] = entry
-    mask = _int(_ed(flat, "AccessMask"))
-    if mask:
-        names = [
-            name for code_, name in _ACCESS_MASKS.items() if _int(code_) and mask & _int(code_)
-        ]
-        if names:
-            flat[f"{EVENT_DATA}.AccessMaskDescription"] = names
     _describe_all(flat)
     privileges = flat.get(f"{EVENT_DATA}.PrivilegeList")
     if isinstance(privileges, str):
@@ -422,37 +477,48 @@ def _security_coded_values(flat: Flat, code: str | None) -> None:
             flat[target] = table[value]
 
 
+def _security_coded_values(flat: Flat, code: str | None) -> None:
+    """Coded values -> names. Raw values stay in event_data, as in Winlogbeat."""
+    _security_flags(flat, code)
+    _security_policy_values(flat)
+
+
+def _security_target_group(
+    flat: Flat, sid: str | None, name: str | None, domain: str | None
+) -> None:
+    for prefix in ("group", "user.target.group"):
+        _set(flat, f"{prefix}.id", sid)
+        _set(flat, f"{prefix}.name", name)
+        _set(flat, f"{prefix}.domain", domain)
+    member = _ed(flat, "MemberName")
+    if not member:
+        return
+    parts = [p.strip() for p in member.split(",")]
+    cn = next((p[3:] for p in parts if p.upper().startswith("CN=")), member)
+    dcs = [p[3:] for p in parts if p.upper().startswith("DC=")]
+    _user(flat, "user.target", sid=_ed(flat, "MemberSid"), name=cn, domain=dcs[-1] if dcs else None)
+
+
 def _security_target(flat: Flat, code: str | None) -> None:
-    target_sid = _ed(flat, "TargetUserSid") or _ed(flat, "TargetSid")
-    target_name, target_domain = _ed(flat, "TargetUserName"), _ed(flat, "TargetDomainName")
+    sid = _ed(flat, "TargetUserSid") or _ed(flat, "TargetSid")
+    name, domain = _ed(flat, "TargetUserName"), _ed(flat, "TargetDomainName")
     if code in _KERBEROS_EVENTS or code == "4776":
         # Kerberos and NTLM validation events describe the account being authenticated.
-        name, domain = target_name, target_domain
         if name and "@" in name:
             name, _, realm = name.partition("@")
             domain = domain or realm
-        _user(flat, "user", sid=target_sid, name=name, domain=domain)
+        _user(flat, "user", sid=sid, name=name, domain=domain)
     elif code in _COMPUTER_EVENTS:
-        _set(flat, "winlog.computerObject.id", target_sid)
-        _set(flat, "winlog.computerObject.name", target_name)
-        _set(flat, "winlog.computerObject.domain", target_domain)
+        _set(flat, "winlog.computerObject.id", sid)
+        _set(flat, "winlog.computerObject.name", name)
+        _set(flat, "winlog.computerObject.domain", domain)
     elif code in _GROUP_EVENTS:
-        for prefix in ("group", "user.target.group"):
-            _set(flat, f"{prefix}.id", target_sid)
-            _set(flat, f"{prefix}.name", target_name)
-            _set(flat, f"{prefix}.domain", target_domain)
-        member = _ed(flat, "MemberName")
-        if member:
-            parts = [p.strip() for p in member.split(",")]
-            cn = next((p[3:] for p in parts if p.upper().startswith("CN=")), member)
-            dcs = [p[3:] for p in parts if p.upper().startswith("DC=")]
-            domain = dcs[-1] if dcs else None
-            _user(flat, "user.target", sid=_ed(flat, "MemberSid"), name=cn, domain=domain)
-    elif target_name or target_sid:
-        _user(flat, "user.target", sid=target_sid, name=target_name, domain=target_domain)
+        _security_target_group(flat, sid, name, domain)
+    elif name or sid:
+        _user(flat, "user.target", sid=sid, name=name, domain=domain)
         logged_in = code in _LOGON_EVENTS and flat.get(EVENT_OUTCOME) != "failure"
         if logged_in or code == "4688":
-            _user(flat, "user.effective", sid=target_sid, name=target_name, domain=target_domain)
+            _user(flat, "user.effective", sid=sid, name=name, domain=domain)
 
 
 def _security_accounts(flat: Flat, code: str | None) -> None:
@@ -501,7 +567,7 @@ def _security_processes(flat: Flat, code: str | None) -> None:
         _set(flat, "process.exit_code", _int(_ed(flat, "Status")))
 
 
-def _security_objects(flat: Flat, code: str | None) -> None:
+def _security_services(flat: Flat, code: str | None) -> None:
     if code in _SERVICE_EVENTS:
         _set(flat, "service.name", _ed(flat, "ServiceName"))
         service_type = _hexkey(_ed(flat, "ServiceType"))
@@ -510,23 +576,84 @@ def _security_objects(flat: Flat, code: str | None) -> None:
         _set(flat, "process.executable", _ed(flat, "ServiceFileName"))
     elif code in _KERBEROS_EVENTS:
         _set(flat, "service.name", _ed(flat, "ServiceName"))
+
+
+def _security_share(flat: Flat) -> None:
+    share, relative = _ed(flat, "ShareName"), _ed(flat, "RelativeTargetName")
+    _set(flat, FILE_NAME, _basename(relative) or relative)
+    directory = _ed(flat, "ShareLocalPath")
+    _set(flat, "file.directory", directory)
+    if directory and flat.get(FILE_NAME):
+        _set(flat, FILE_PATH, f"{directory.rstrip(chr(92))}\\{flat[FILE_NAME]}")
+    if share and relative:
+        _set(flat, "file.target_path", f"{share}\\{relative}")
+    elif share:
+        _set(flat, "file.target_path", share)
+
+
+def _security_objects(flat: Flat, code: str | None) -> None:
+    _security_services(flat, code)
     if code in _SHARE_EVENTS:
-        share, relative = _ed(flat, "ShareName"), _ed(flat, "RelativeTargetName")
-        _set(flat, FILE_NAME, _basename(relative) or relative)
-        directory = _ed(flat, "ShareLocalPath")
-        _set(flat, "file.directory", directory)
-        if directory and flat.get(FILE_NAME):
-            _set(flat, FILE_PATH, f"{directory.rstrip(chr(92))}\\{flat[FILE_NAME]}")
-        if share and relative:
-            _set(flat, "file.target_path", f"{share}\\{relative}")
-        elif share:
-            _set(flat, "file.target_path", share)
+        _security_share(flat)
     elif code in _OBJECT_EVENTS:
         object_type = _ed(flat, "ObjectType")
         if object_type == "File":
             _file_from_path(flat, _ed(flat, "ObjectName"))
         elif object_type == "Key":
             _set(flat, REGISTRY_PATH, _ed(flat, "ObjectName"))
+        if code not in _SEC.get("events", {}) and object_type in _OBJECT_CATEGORIES:
+            # Object access events are not categorised by Winlogbeat; categorise by object type.
+            flat.setdefault("event.category", [_OBJECT_CATEGORIES[object_type]])
+            flat.setdefault("event.type", ["access"])
+            flat.setdefault("event.action", _OBJECT_ACTIONS.get(code, "object-access"))
+    elif code == "4657":
+        # Registry value modified: not mapped by Winlogbeat, but a direct fit for registry.*
+        _set(flat, REGISTRY_PATH, _ed(flat, "ObjectName"))
+        _set(flat, "registry.value", _ed(flat, "ObjectValueName"))
+        new_value = _ed(flat, "NewValue")
+        if new_value is not None:
+            flat[REGISTRY_DATA_STRINGS] = [new_value]
+        _set(flat, REGISTRY_DATA_TYPE, _ed(flat, "NewValueType"))
+
+
+#: Windows Filtering Platform events carry a full 5-tuple; Winlogbeat leaves
+#: them in event_data, but they are a direct fit for ECS network fields.
+_WFP_EVENTS = {"5150", "5151", "5152", "5153", "5154", "5155", "5156", "5157", "5158", "5159"}
+_IP_PROTOCOLS = {
+    1: "icmp",
+    2: "igmp",
+    6: "tcp",
+    17: "udp",
+    41: "ipv6",
+    47: "gre",
+    58: "icmpv6",
+    132: "sctp",
+}
+
+
+def _security_wfp(flat: Flat, code: str | None) -> None:
+    if code not in _WFP_EVENTS:
+        return
+    _set(flat, SOURCE_IP, _ip(_ed(flat, "SourceAddress")))
+    _set(flat, SOURCE_PORT, _int(_ed(flat, "SourcePort")))
+    _set(flat, DESTINATION_IP, _ip(_ed(flat, "DestAddress")))
+    _set(flat, DESTINATION_PORT, _int(_ed(flat, "DestPort")))
+    protocol = _int(_ed(flat, "Protocol"))
+    if protocol is not None:
+        _set(flat, NETWORK_TRANSPORT, _IP_PROTOCOLS.get(protocol, str(protocol)))
+        _set(flat, "network.iana_number", str(protocol))
+    direction = flat.get(f"{EVENT_DATA}.Direction")
+    if isinstance(direction, str) and direction.lower() in ("inbound", "outbound"):
+        flat["network.direction"] = direction.lower()
+    application = _ed(flat, "Application")
+    if application:
+        _set(flat, "process.executable", application)
+        _set(flat, "process.name", _basename(application))
+    _set(flat, "process.pid", _int(_ed(flat, "ProcessID")))
+    if flat.get("winlog.event_data.FilterRTID"):
+        _set(flat, "rule.id", flat["winlog.event_data.FilterRTID"])
+    for key in (SOURCE_IP, DESTINATION_IP):
+        _append(flat, RELATED_IP, flat.get(key))
 
 
 def security(flat: Flat) -> None:
@@ -538,6 +665,7 @@ def security(flat: Flat) -> None:
     _security_accounts(flat, code)
     _security_processes(flat, code)
     _security_objects(flat, code)
+    _security_wfp(flat, code)
 
 
 # -- Sysmon -------------------------------------------------------------------------------
@@ -686,25 +814,17 @@ def _sysmon_files(flat: Flat) -> None:
         flat["file.code_signature.valid"] = status == "Valid"
 
 
-def _sysmon_network(flat: Flat, code: str | None) -> None:
-    _set(flat, "network.transport", (_ed(flat, "Protocol") or "").lower() or None)
-    _set(flat, SOURCE_IP, _ip(_ed(flat, "SourceIp")))
-    _set(flat, SOURCE_PORT, _int(_ed(flat, "SourcePort")))
-    _set(flat, SOURCE_DOMAIN, _ed(flat, "SourceHostname"))
-    _set(flat, DESTINATION_IP, _ip(_ed(flat, "DestinationIp")))
-    _set(flat, "destination.port", _int(_ed(flat, "DestinationPort")))
-    _set(flat, "destination.domain", _ed(flat, "DestinationHostname"))
-    if code == "22":
-        flat["network.protocol"] = "dns"
-        _set(flat, "dns.question.name", _ed(flat, "QueryName"))
-        _append(flat, RELATED_HOSTS, _ed(flat, "QueryName"))
-        _dns_answers(flat, _ed(flat, "QueryResults"))
-        status = _ed(flat, "QueryStatus")
-        if status is not None:
-            flat["sysmon.dns.status"] = _DNS_STATUS.get(status, status)
-    else:
-        protocol = _ed(flat, "DestinationPortName") or _ed(flat, "SourcePortName")
-        _set(flat, "network.protocol", protocol)
+def _sysmon_dns(flat: Flat) -> None:
+    flat["network.protocol"] = "dns"
+    _set(flat, "dns.question.name", _ed(flat, "QueryName"))
+    _append(flat, RELATED_HOSTS, _ed(flat, "QueryName"))
+    _dns_answers(flat, _ed(flat, "QueryResults"))
+    status = _ed(flat, "QueryStatus")
+    if status is not None:
+        flat["sysmon.dns.status"] = _DNS_STATUS.get(status, status)
+
+
+def _sysmon_flow(flat: Flat) -> None:
     initiated = _ed(flat, "Initiated")
     if initiated is not None:
         flat["network.direction"] = "egress" if initiated.lower() == "true" else "ingress"
@@ -712,15 +832,31 @@ def _sysmon_network(flat: Flat, code: str | None) -> None:
     if v6 is not None:
         flat["network.type"] = "ipv6" if v6.lower() == "true" else "ipv4"
     src, dst = flat.get(SOURCE_IP), flat.get(DESTINATION_IP)
-    proto = flat.get("network.transport")
+    proto = flat.get(NETWORK_TRANSPORT)
     if src and dst and proto:
         from evtxtoelk.community_id import community_id
 
-        cid = community_id(src, dst, proto, flat.get(SOURCE_PORT), flat.get("destination.port"))
+        cid = community_id(src, dst, proto, flat.get(SOURCE_PORT), flat.get(DESTINATION_PORT))
         if cid:
             flat["network.community_id"] = cid
     _append(flat, RELATED_IP, src)
     _append(flat, RELATED_IP, dst)
+
+
+def _sysmon_network(flat: Flat, code: str | None) -> None:
+    _set(flat, NETWORK_TRANSPORT, (_ed(flat, "Protocol") or "").lower() or None)
+    _set(flat, SOURCE_IP, _ip(_ed(flat, "SourceIp")))
+    _set(flat, SOURCE_PORT, _int(_ed(flat, "SourcePort")))
+    _set(flat, SOURCE_DOMAIN, _ed(flat, "SourceHostname"))
+    _set(flat, DESTINATION_IP, _ip(_ed(flat, "DestinationIp")))
+    _set(flat, DESTINATION_PORT, _int(_ed(flat, "DestinationPort")))
+    _set(flat, "destination.domain", _ed(flat, "DestinationHostname"))
+    if code == "22":
+        _sysmon_dns(flat)
+    else:
+        protocol = _ed(flat, "DestinationPortName") or _ed(flat, "SourcePortName")
+        _set(flat, "network.protocol", protocol)
+    _sysmon_flow(flat)
 
 
 def _sysmon_user(flat: Flat) -> None:

@@ -1,6 +1,6 @@
 [project]
 name = "evtxtoelk"
-version = "2.1.0"
+version = "2.1.1"
 description = "Load Windows Event Log (.evtx) files into Elasticsearch."
 readme = "README.md"
 license = "Apache-2.0"

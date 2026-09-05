@@ -317,6 +317,22 @@ def _data_items(event_data: dict[str, Any], named: dict[str, str], unnamed: list
                 unnamed.append(text)
 
 
+def _payload_item(key: str, value: Any, named: dict[str, str], unnamed: list[str]) -> None:
+    """One child of ``EventData`` other than ``Data`` (handled by :func:`_data_items`)."""
+    if key == "Binary":
+        text = _text(value)
+        if text:
+            named["Binary"] = text
+    elif key == TEXT:
+        if str(value).strip():
+            unnamed.append(str(value))
+    elif not isinstance(value, dict) or TEXT in value:
+        # Provider-defined children (Sysmon writes <Data> only, but be safe).
+        text = _text(value)
+        if text is not None:
+            named[key.lstrip("@")] = text
+
+
 def _event_data_fields(event_data: Any) -> tuple[dict[str, str], list[str]]:
     """``EventData`` -> ({Name: value}, [unnamed values]). Values are strings, ``-`` kept."""
     named: dict[str, str] = {}
@@ -324,24 +340,12 @@ def _event_data_fields(event_data: Any) -> tuple[dict[str, str], list[str]]:
     if isinstance(event_data, str):
         if event_data:
             unnamed.append(event_data)
-        return named, unnamed
-    if not isinstance(event_data, dict):
-        return named, unnamed
-    for key, value in event_data.items():
-        if key == "Data":
-            _data_items(event_data, named, unnamed)
-        elif key == "Binary":
-            text = _text(value)
-            if text:
-                named["Binary"] = text
-        elif key == TEXT:
-            if str(value).strip():
-                unnamed.append(str(value))
-        elif not isinstance(value, dict) or TEXT in value:
-            # Provider-defined children (Sysmon writes <Data> only, but be safe).
-            text = _text(value)
-            if text is not None:
-                named[key.lstrip("@")] = text
+    elif isinstance(event_data, dict):
+        for key, value in event_data.items():
+            if key == "Data":
+                _data_items(event_data, named, unnamed)
+            else:
+                _payload_item(key, value, named, unnamed)
     return named, unnamed
 
 
@@ -368,10 +372,10 @@ def _route(channel: str | None, provider: str | None) -> tuple[str | None, str]:
     return None, f"windows.{_slug(channel or provider or 'unknown')}"
 
 
-def _system_fields(system: dict[str, Any]) -> Flat:
+def _system_identity(system: dict[str, Any]) -> Flat:
+    """Provider, ids, host and timestamps from the ``System`` block."""
     flat: Flat = {}
     provider = system.get("Provider") or {}
-    event_id = _text(system.get("EventID"))
     time_created = (system.get("TimeCreated") or {}).get("@SystemTime")
     if time_created:
         try:
@@ -381,13 +385,19 @@ def _system_fields(system: dict[str, Any]) -> Flat:
         else:
             flat[TIMESTAMP] = flat["event.created"] = flat["winlog.time_created"] = stamp
     flat["event.kind"] = "event"
-    flat["event.code"] = flat["winlog.event_id"] = event_id
+    flat["event.code"] = flat["winlog.event_id"] = _text(system.get("EventID"))
     flat["event.provider"] = flat["winlog.provider_name"] = provider.get(NAME_ATTR)
     flat["winlog.provider_guid"] = _normalize_scalar(provider.get("@Guid") or "") or None
     flat["winlog.channel"] = _text(system.get("Channel"))
     flat["winlog.computer_name"] = flat["host.name"] = _text(system.get("Computer"))
     flat["winlog.record_id"] = _text(system.get("EventRecordID"))
     flat["winlog.version"] = _text(system.get("Version"))
+    return flat
+
+
+def _system_classification(system: dict[str, Any]) -> Flat:
+    """Level, opcode, task and keywords, named where the standard tables allow."""
+    flat: Flat = {}
     level = _as_int(_text(system.get("Level")))
     if level is not None:
         flat["log.level"] = _LEVELS.get(level, str(level))
@@ -398,6 +408,12 @@ def _system_fields(system: dict[str, Any]) -> Flat:
     keywords = _as_int(_text(system.get("Keywords")))
     if keywords is not None:
         flat["winlog.keywords"] = _decode_keywords(keywords)
+    return flat
+
+
+def _system_context(system: dict[str, Any]) -> Flat:
+    """Correlation, the logging process and the logging account."""
+    flat: Flat = {}
     correlation = system.get("Correlation") or {}
     flat["winlog.activity_id"] = _normalize_scalar(correlation.get("@ActivityID") or "") or None
     flat["winlog.related_activity_id"] = (
@@ -412,6 +428,13 @@ def _system_fields(system: dict[str, Any]) -> Flat:
         known = _WELL_KNOWN_SIDS.get(sid)
         if known:
             flat["winlog.user.name"], flat["winlog.user.domain"], flat["winlog.user.type"] = known
+    return flat
+
+
+def _system_fields(system: dict[str, Any]) -> Flat:
+    flat = _system_identity(system)
+    flat.update(_system_classification(system))
+    flat.update(_system_context(system))
     return flat
 
 
