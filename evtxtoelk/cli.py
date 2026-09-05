@@ -7,6 +7,7 @@ import json
 import logging
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from elasticsearch import ApiError, TransportError
@@ -120,7 +121,7 @@ def write_json_lines(
                 sys.stdout.write(json.dumps(doc) + "\n")
                 count += 1
         return count
-    with open(output, "w", encoding="utf-8") as handle:
+    with resolve_output_path(output).open("w", encoding="utf-8") as handle:
         for path in paths:
             for doc in iter_documents(path, metadata):
                 handle.write(json.dumps(doc) + "\n")
@@ -128,29 +129,58 @@ def write_json_lines(
     return count
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    level = logging.DEBUG if args.verbose else logging.INFO
+def resolve_output_path(output: str) -> Path:
+    """Turn a user-supplied export path into an absolute file path we are willing to write.
+
+    The parent directory must already exist and the target must not be a
+    directory, so a mistyped path fails with a clear message instead of
+    creating files somewhere unexpected.
+    """
+    target = Path(output).expanduser().resolve()
+    if not target.parent.is_dir():
+        raise FileNotFoundError(f"output directory does not exist: {target.parent}")
+    if target.is_dir():
+        raise IsADirectoryError(f"output path is a directory: {target}")
+    return target
+
+
+def _fail(message: str, exc: BaseException) -> int:
+    """Log a one-line error for the user (traceback only at debug level) and return exit 1."""
+    log.error("%s: %s", message, exc)
+    log.debug("traceback:", exc_info=exc)
+    return 1
+
+
+def _configure_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s %(message)s", stream=sys.stderr)
     logging.getLogger("evtxtoelk").setLevel(level)
     logging.getLogger("elastic_transport").setLevel(logging.WARNING)
     logging.getLogger("Evtx").setLevel(logging.ERROR)
 
-    output = args.output
-    if args.dry_run:
-        output = "-"
-    elif output is None and _looks_like_json_path(args.destination):
-        output = args.destination
-    if output is not None:
-        try:
-            count = write_json_lines(args.evtxfile, output, args.meta)
-        except OSError as exc:
-            log.error("%s", exc)
-            return 1
-        if output != "-":
-            log.info("%d events exported to %s", count, output)
-        return 0
 
+def _export_target(args: argparse.Namespace) -> str | None:
+    """Where JSON lines should go, or None when the run indexes into Elasticsearch."""
+    if args.dry_run:
+        return "-"
+    if args.output is not None:
+        return args.output
+    if _looks_like_json_path(args.destination):
+        return args.destination
+    return None
+
+
+def _run_export(args: argparse.Namespace, output: str) -> int:
+    try:
+        count = write_json_lines(args.evtxfile, output, args.meta)
+    except OSError as exc:
+        return _fail("cannot write output", exc)
+    if output != "-":
+        log.info("%d events exported to %s", count, output)
+    return 0
+
+
+def _run_index(args: argparse.Namespace) -> int:
     password = args.password
     if args.user and password is None:
         import getpass
@@ -172,16 +202,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             log.info("created index %s", args.index)
         result = loader.load_many(args.evtxfile)
     except (ApiError, TransportError) as exc:
-        log.error("Elasticsearch error: %s", exc)
-        return 1
+        return _fail("Elasticsearch error", exc)
     except OSError as exc:
-        log.error("%s", exc)
-        return 1
+        return _fail("cannot read input", exc)
 
     log.info("done: indexed=%d failed=%d skipped=%d", result.indexed, result.failed, result.skipped)
     for err in result.errors:
         log.error("bulk failure: %s", err)
     return 0 if result.ok else 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    _configure_logging(args.verbose)
+    output = _export_target(args)
+    if output is not None:
+        return _run_export(args, output)
+    return _run_index(args)
 
 
 if __name__ == "__main__":

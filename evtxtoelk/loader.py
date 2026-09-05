@@ -49,7 +49,9 @@ def normalize_url(host: str) -> str:
     """
     host = host.strip()
     if "://" not in host:
-        host = f"http://{host}"
+        # Plain HTTP is what a bare host meant in 1.x and what a dev cluster with
+        # security disabled speaks; pass an https:// URL for anything else.
+        host = f"http://{host}"  # NOSONAR python:S5332 - explicit scheme wins, see docstring
     parts = urlsplit(host)
     if parts.port is None and parts.scheme == "http":
         netloc = f"{parts.hostname}:{DEFAULT_PORT}"

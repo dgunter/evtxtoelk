@@ -33,8 +33,9 @@ def test_meta_flag_aliases(flag):
 
 @pytest.mark.parametrize("bad", ["not json", "[1, 2]", '"str"'])
 def test_meta_must_be_json_object(bad, capsys):
+    parser = cli.build_parser()
     with pytest.raises(SystemExit) as exc:
-        cli.build_parser().parse_args(["f.evtx", "localhost", "-m", bad])
+        parser.parse_args(["f.evtx", "localhost", "-m", bad])
     assert exc.value.code == 2
     assert "meta" in capsys.readouterr().err.lower()
 
@@ -200,3 +201,26 @@ def test_output_to_unwritable_path_returns_1(tmp_path, data_dir, caplog):
     rc = cli.main([str(data_dir / "issue_38.evtx"), str(tmp_path / "missing" / "x.json")])
     assert rc == 1
     assert "missing" in caplog.text
+
+
+def test_resolve_output_path_expands_and_validates(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = cli.resolve_output_path("~/out.json")
+    assert target == tmp_path / "out.json"
+    with pytest.raises(IsADirectoryError):
+        cli.resolve_output_path(str(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        cli.resolve_output_path(str(tmp_path / "nope" / "out.json"))
+
+
+def test_verbose_logs_traceback_on_failure(caplog):
+    from elastic_transport import ConnectionError as ESConnectionError
+
+    es = mock.Mock()
+    with (
+        mock.patch.object(cli, "make_client", return_value=es),
+        mock.patch.object(cli.EvtxToElk, "load_many", side_effect=ESConnectionError("refused")),
+    ):
+        assert cli.main(["a.evtx", "localhost", "-v"]) == 1
+    assert "Elasticsearch error: " in caplog.text
+    assert "Traceback" in caplog.text
