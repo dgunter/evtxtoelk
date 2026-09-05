@@ -37,7 +37,9 @@ all, with notes on what changed. Version 2.0 is the same idea rebuilt for
 Elasticsearch 8 and 9: a proper package with a command-line tool,
 authentication and TLS options, a mapping that keeps field types stable, a
 JSON-lines export, and a test suite that runs the loader over several hundred
-real-world logs.
+real-world logs. Version 2.1 moved the documents to Elastic Common Schema,
+and 2.2 swapped the parser for the Rust-backed `evtx` wheels, so a
+gigabyte-scale corpus now parses in seconds rather than minutes.
 
 ## What you get in Elasticsearch
 
@@ -96,8 +98,8 @@ mapping.
 Requires Python 3.10 or newer and Elasticsearch 8 or 9. Parsing uses the
 Rust-backed [`evtx`](https://pypi.org/project/evtx/) wheels on x86-64 and
 64-bit ARM Linux, macOS (Intel and Apple Silicon) and Windows; other
-platforms get the pure-Python `python-evtx` automatically. Both produce
-identical documents, the Rust one about 140 times faster. `--parser` or
+platforms get the pure-Python `python-evtx` automatically. Both produce the
+same documents, the Rust one about 140 times faster. `--parser` or
 `EVTXTOELK_PARSER=python` forces a backend.
 
 ```bash
@@ -270,7 +272,7 @@ an Elasticsearch service container, then uploads coverage to
 ## Further reading
 
 - [EvtxToElk: a Python module to load Windows Event Logs into Elasticsearch](docs/blog-2018-evtxtoelk.md), the July 2018 write-up by Dan Gunter and Marc Seitz, recovered from the [Wayback Machine](https://web.archive.org/web/20250812132436/https://www.dragos.com/blog/industry-news/evtxtoelk-a-python-module-to-load-windows-event-logs-into-elasticsearch/) after Dragos removed it.
-- [CHANGELOG.md](CHANGELOG.md) for everything that changed in 2.0.
+- [CHANGELOG.md](CHANGELOG.md) for everything that changed since 2.0.
 - Sample logs for trying it out: [EVTX-ATTACK-SAMPLES](https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES) and the [python-evtx test data](https://github.com/williballenthin/python-evtx/tree/master/tests/data).
 
 ## Thanks

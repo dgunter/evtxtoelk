@@ -1,6 +1,7 @@
 # Design: Elastic Common Schema output for evtxtoelk
 
-Status: accepted 5 September 2026; phases 1-5 implemented in 2.1.0, extended in 2.1.1.
+Status: accepted 5 September 2026; phases 1-5 implemented in 2.1.0, extended in 2.1.1;
+parsing moved to the Rust `evtx` wheels in 2.2.0 with python-evtx as the fallback.
 
 ## Goal
 
@@ -122,7 +123,7 @@ Applied to every event regardless of provider. Types are the published ones.
 | `winlog.user.name`, `winlog.user.domain`, `winlog.user.type` | keyword | well-known SID table only | e.g. `S-1-5-18` → `SYSTEM`, `NT AUTHORITY`, `Well Known Group` |
 | `winlog.event_data.<Name>` | keyword | `EventData/Data[@Name]` | every value as a string, see type policy |
 | `winlog.event_data.paramN` | keyword | unnamed `EventData/Data` items, 1-based | Winlogbeat's convention |
-| `winlog.event_data.Binary` | keyword | `EventData/Binary` | hex string as logged |
+| `winlog.event_data.Binary` | keyword | `EventData/Binary` | uppercase hex, whichever parser produced it |
 | `winlog.user_data.*` | object | `UserData/*` | provider XML as nested keys; attribute keys lose the `@` prefix, text nodes become the value |
 | `ecs.version` | keyword | constant | `9.5.0` |
 
@@ -301,6 +302,12 @@ Learned from comparing against Winlogbeat's golden documents, and applied:
 - Hex values in `event_data` are rendered as minimal lowercase hex
   (`0x3e7`, not `0x00000000000003e7`) and GUIDs uppercase, as Winlogbeat's
   collector renders them. Empty strings are kept.
+- Rendering is independent of the parser backend (2.2): binary payloads as
+  uppercase hex, FILETIME values as ISO-8601 with a `Z` suffix, booleans as
+  `true`/`false`, GUID-typed values in uppercase braces, and control
+  characters that XML forbids dropped. A parity test runs both parsers over
+  the fixtures in CI. The one known difference is that python-evtx renders
+  multi-value positional substitutions as a single `<string>`-tagged blob.
 - Every `%%NNNN` message reference in Security `event_data` is resolved from
   the pipeline's description table, in place; multi-valued ones become lists.
 - `winlog.user_data` is flattened to the children of the single root element
