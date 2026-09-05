@@ -1,6 +1,6 @@
 # Design: Elastic Common Schema output for evtxtoelk
 
-Status: accepted 5 September 2026; implementation in progress from phase 1.
+Status: accepted 5 September 2026; implemented in 2.1.0 (all phases).
 
 ## Goal
 
@@ -293,3 +293,29 @@ together about the same again.
 - ECS is the default in 2.1, with `--legacy` for the 2.0 layout.
 - `winlog.event_data.*` is always emitted, including for Sysmon events whose
   values are fully promoted to ECS fields, matching Winlogbeat.
+
+## Implementation notes
+
+Learned from comparing against Winlogbeat's golden documents, and applied:
+
+- Hex values in `event_data` are rendered as minimal lowercase hex
+  (`0x3e7`, not `0x00000000000003e7`) and GUIDs uppercase, as Winlogbeat's
+  collector renders them. Empty strings are kept.
+- Every `%%NNNN` message reference in Security `event_data` is resolved from
+  the pipeline's description table, in place; multi-valued ones become lists.
+- `winlog.user_data` is flattened to the children of the single root element
+  plus `xml_name`, as Winlogbeat does; Security events that use `UserData`
+  (1102) are handled by the same rules as `EventData` events.
+- `event.action` for Sysmon and PowerShell is the provider's task name, which
+  Winlogbeat renders from the manifest and which is fixed per event id; the
+  Security task categories are tabled too.
+- Sysmon `@timestamp` is `UtcTime`; `event.created` keeps `TimeCreated`.
+- Sysmon command lines are split quote-aware; Security 4688 command lines on
+  whitespace, with quotes kept, matching the two pipelines.
+- All-zero hashes are dropped; imphash joins `related.hash`.
+- `event.dataset` follows the Elastic Agent integrations
+  (`system.security`, `windows.sysmon_operational`,
+  `windows.powershell_operational`, `windows.powershell`,
+  `windows.<channel>` otherwise); Winlogbeat's modules do not set it.
+- Deliberate divergence: `winlog.event_data.*` is always kept, including
+  for Sysmon where Winlogbeat removes promoted values.

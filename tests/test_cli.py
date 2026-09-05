@@ -8,7 +8,9 @@ from evtxtoelk.loader import LoadResult
 
 
 def test_dry_run_prints_ndjson(capsys, data_dir):
-    rc = cli.main([str(data_dir / "issue_38.evtx"), "localhost", "--dry-run", "-m", '{"c": 1}'])
+    rc = cli.main(
+        [str(data_dir / "issue_38.evtx"), "localhost", "--dry-run", "--legacy", "-m", '{"c": 1}']
+    )
     assert rc == 0
     lines = capsys.readouterr().out.strip().splitlines()
     assert len(lines) == 1
@@ -107,7 +109,7 @@ def test_main_creates_index_when_asked(caplog):
         ["a.evtx", "localhost", "--create-index"], LoadResult(indexed=1), create_index_return=True
     )
     assert rc == 0
-    ensure.assert_called_once_with(es, "hostlogs")
+    ensure.assert_called_once_with(es, "hostlogs", ecs=True)
     assert "created index hostlogs" in caplog.text
 
 
@@ -158,7 +160,7 @@ def test_output_file_writes_ndjson(tmp_path, data_dir, caplog):
     assert rc == 0
     lines = out.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
-    assert json.loads(lines[0])["Event"]["System"]["Computer"] == "foobar-PC"
+    assert json.loads(lines[0])["host"]["name"] == "foobar-PC"
     assert f"1 events exported to {out}" in caplog.text
 
 
@@ -189,7 +191,10 @@ def test_output_file_overwrites_and_covers_multiple_inputs(tmp_path, data_dir):
     out = tmp_path / "all.json"
     out.write_text("stale\n")
     count = cli.write_json_lines(
-        [str(data_dir / "issue_38.evtx"), str(data_dir / "system.evtx")], str(out), {"m": 1}
+        [str(data_dir / "issue_38.evtx"), str(data_dir / "system.evtx")],
+        str(out),
+        {"m": 1},
+        ecs=False,
     )
     assert count == 1602
     lines = out.read_text(encoding="utf-8").splitlines()

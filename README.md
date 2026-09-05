@@ -41,33 +41,50 @@ real-world logs.
 
 ## What you get in Elasticsearch
 
-A `Security.evtx` logon event comes out like this. Event IDs, users, logon
-types and every other `EventData` value are individual fields you can filter,
-aggregate and visualise in Kibana:
+Since 2.1 the documents follow Elastic Common Schema, in the layout Winlogbeat
+uses, so Elastic's prebuilt Windows detection rules, the Security app and ECS
+dashboards work on them directly. A Security 4688 process-creation event comes
+out like this (event data trimmed):
 
 ```json
 {
-  "@timestamp": "2016-07-08T18:12:51.681641+00:00",
-  "Event": {
-    "System": {
-      "Provider": {"@Name": "Microsoft-Windows-Security-Auditing"},
-      "EventID": {"@Qualifiers": "", "#text": "4624"},
-      "TimeCreated": {"@SystemTime": "2016-07-08T18:12:51.681641+00:00"},
-      "Channel": "Security",
-      "Computer": "WKS01"
-    },
-    "EventData": {
-      "Data": {"SubjectUserName": "alice", "LogonType": "2", "IpAddress": "10.0.0.7"}
-    }
-  },
-  "meta": {"case": "1234"}
+  "@timestamp": "2019-02-13T18:01:47.562412+00:00",
+  "event": {"kind": "event", "code": "4688", "provider": "Microsoft-Windows-Security-Auditing",
+            "module": "security", "dataset": "system.security", "action": "created-process",
+            "category": ["process"], "type": ["start"], "outcome": "success"},
+  "host": {"name": "PC01.example.corp"},
+  "user": {"id": "S-1-5-18", "name": "PC01$", "domain": "EXAMPLE"},
+  "process": {"pid": 508, "executable": "C:\\Windows\\System32\\TSTheme.exe", "name": "TSTheme.exe",
+              "parent": {"pid": 632}},
+  "related": {"user": ["PC01$"]},
+  "winlog": {"channel": "Security", "event_id": "4688", "record_id": "227695", "task": "Process Creation",
+             "keywords": ["Audit Success"], "logon": {"id": "0x3e7"},
+             "event_data": {"NewProcessId": "0x1fc", "NewProcessName": "C:\\Windows\\System32\\TSTheme.exe",
+                            "SubjectUserName": "PC01$", "TokenElevationType": "TokenElevationTypeFull (2)"}},
+  "ecs": {"version": "9.5.0"}
 }
 ```
 
-In Kibana, create a data view for `hostlogs*` with `@timestamp` as the time
-field. A pie chart of `Event.System.EventID.#text` and a table of
-`Event.EventData.Data.SubjectUserName` are the usual first two visualisations
-on a new dataset; the original post walks through both.
+Every record gets the `winlog.*`, `event.*`, `host.name` and `log.level`
+fields, with `EventData` under `winlog.event_data` and `UserData` under
+`winlog.user_data`. Security, Sysmon and PowerShell events additionally get
+what the Winlogbeat modules derive: logon types and failure reasons, target
+and effective users, process and parent process with command lines, file
+hashes and code signatures, registry keys and values, network connections
+with Community ID, DNS answers, and PowerShell script blocks and command
+invocations. Field names and types come from the published ECS 9.5.0 and
+Winlogbeat 9.5 references, every value is coerced to its declared type, and
+`--create-index` builds the matching mapping. The output is checked against
+Winlogbeat's own golden documents in the test suite.
+
+Not available from an offline file, and therefore absent: the rendered
+`message`, keyword, opcode and task names for providers other than the
+standard ones and the three modules, and account names for SIDs beyond the
+well-known ones. Details are in [docs/design-ecs.md](docs/design-ecs.md).
+
+Existing dashboards built on the 2.0 layout keep working with `--legacy`,
+which emits the `Event.System.*` / `Event.EventData.Data.*` shape and its
+mapping.
 
 ## Install
 
@@ -143,7 +160,10 @@ evtxtoelk Security.evtx - | head -1 | jq .
 | `--ca-certs` | | CA bundle for TLS verification |
 | `-k`, `--insecure` | | Skip certificate verification |
 | `--timeout` | `60` | Request timeout in seconds |
-| `--create-index` | | Create the index with the recommended mapping |
+| `--create-index` | | Create the index with the mapping for the chosen layout |
+| `--legacy` | | Emit the 2.0 document layout instead of ECS |
+| `--ecs-original` | | Include the record XML as `event.original` |
+| `--no-dedupe` | | Let Elasticsearch assign ids instead of one derived from host, channel and record id |
 | `-o`, `--output` | | Write JSON lines to a file (`-` for stdout) |
 | `--dry-run` | | Same as `--output -` or a `-` destination |
 | `-v`, `--verbose` | | Debug logging |
@@ -152,7 +172,7 @@ Exit status is `0` when every readable record was indexed and `1` when any
 bulk item failed or the cluster could not be reached. Skipped (corrupt) records
 are reported in the summary line but do not change the exit status.
 
-### Document layout
+### Legacy document layout (`--legacy`)
 
 ```json
 {

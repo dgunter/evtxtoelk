@@ -40,10 +40,10 @@ def test_server_is_current_major(es):
 
 
 def test_load_system_log_with_created_index(es, index, data_dir):
-    assert ensure_index(es, index) is True
-    assert ensure_index(es, index) is False
+    assert ensure_index(es, index, ecs=False) is True
+    assert ensure_index(es, index, ecs=False) is False
 
-    result = EvtxToElk(es, index=index, bulk_size=200, metadata={"case": "it"}).load(
+    result = EvtxToElk(es, index=index, bulk_size=200, metadata={"case": "it"}, ecs=False).load(
         str(data_dir / "system.evtx")
     )
     assert result.ok, result.errors
@@ -78,7 +78,7 @@ def test_load_system_log_with_created_index(es, index, data_dir):
 
 def test_load_security_log_into_dynamic_index(es, index, data_dir):
     """No pre-created mapping: dynamic mapping must cope with every record shape."""
-    result = EvtxToElk(es, index=index).load(str(data_dir / "security.evtx"))
+    result = EvtxToElk(es, index=index, ecs=False).load(str(data_dir / "security.evtx"))
     assert result.ok, result.errors
     assert result.indexed == 2261
     assert _count(es, index) == 2261
@@ -89,7 +89,7 @@ def test_load_security_log_into_dynamic_index(es, index, data_dir):
 
 
 def test_malformed_file_loads_what_it_can(es, index, data_dir):
-    result = EvtxToElk(es, index=index).load(str(data_dir / "dns_log_malformed.evtx"))
+    result = EvtxToElk(es, index=index, ecs=False).load(str(data_dir / "dns_log_malformed.evtx"))
     assert (result.indexed, result.failed, result.skipped) == (1, 0, 4)
     assert _count(es, index) == 1
 
@@ -113,6 +113,7 @@ def test_cli_end_to_end(es, es_url, index, data_dir):
             "-i",
             index,
             "--create-index",
+            "--legacy",
             "-m",
             '{"source": "cli"}',
         ]
@@ -120,3 +121,36 @@ def test_cli_end_to_end(es, es_url, index, data_dir):
     assert rc == 0
     assert _count(es, index) == 1602
     assert es.count(index=index, query={"term": {"meta.source.keyword": "cli"}})["count"] == 1602
+
+
+def test_ecs_load_and_query(es, es_url, index, data_dir):
+    assert ensure_index(es, index) is True  # ECS mapping by default
+    result = EvtxToElk(es, index=index, metadata={"observer.name": "lab"}).load(
+        str(data_dir / "security.evtx")
+    )
+    assert result.ok, result.errors
+    assert result.indexed == 2261
+    assert _count(es, index) == 2261
+    # deterministic ids: a second load is idempotent
+    again = EvtxToElk(es, index=index, metadata={"observer.name": "lab"}).load(
+        str(data_dir / "security.evtx")
+    )
+    assert again.ok
+    assert _count(es, index) == 2261
+    logons = es.count(index=index, query={"term": {"event.code": "4624"}})["count"]
+    assert logons > 0
+    assert es.count(index=index, query={"term": {"event.action": "logged-in"}})["count"] == logons
+    hit = es.search(index=index, query={"term": {"event.code": "4624"}}, size=1)["hits"]["hits"][0][
+        "_source"
+    ]
+    assert es.count(index=index, query={"exists": {"field": "winlog.logon.type"}})["count"] > 0
+    assert hit["observer"]["name"] == "lab"
+    assert isinstance(hit["winlog"]["process"]["pid"], int)
+    mapping = es.indices.get_mapping(index=index)[index]["mappings"]["properties"]
+    assert mapping["source"]["properties"]["ip"]["type"] == "ip"
+    assert mapping["process"]["properties"]["pid"]["type"] == "long"
+    # Elasticsearch reports object fields by their properties, without an explicit type
+    assert "properties" in mapping["winlog"]["properties"]["event_data"]
+    assert es.count(index=index, query={"range": {"winlog.process.pid": {"gt": 0}}})["count"] > 0
+    rc = main([str(data_dir / "issue_38.evtx"), es_url, "-i", index])
+    assert rc == 0

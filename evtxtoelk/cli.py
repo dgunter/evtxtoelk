@@ -6,7 +6,7 @@ import argparse
 import json
 import logging
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +82,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="create the index with the recommended mapping if it does not exist",
     )
+    layout = parser.add_argument_group("document layout")
+    layout.add_argument(
+        "--legacy",
+        action="store_true",
+        help="emit the 2.0 layout (Event.System.*, Event.EventData.Data.*) instead of ECS",
+    )
+    layout.add_argument(
+        "--ecs-original",
+        action="store_true",
+        help="include the record XML as event.original (ECS layout only)",
+    )
+    layout.add_argument(
+        "--no-dedupe",
+        action="store_true",
+        help="let Elasticsearch assign ids instead of one derived from host, channel and record id",
+    )
     out = parser.add_argument_group("file output (no Elasticsearch needed)")
     out.add_argument(
         "-o",
@@ -106,8 +122,35 @@ def _looks_like_json_path(destination: str) -> bool:
     return destination == "-" or destination.lower().endswith(JSON_SUFFIXES)
 
 
+def _documents(
+    paths: Sequence[str],
+    metadata: dict[str, Any] | None,
+    *,
+    ecs: bool,
+    original: bool,
+) -> Iterator[dict[str, Any]]:
+    if not ecs:
+        for path in paths:
+            yield from iter_documents(path, metadata)
+        return
+    from evtxtoelk.ecs import to_ecs
+    from evtxtoelk.transform import iter_record_xml
+
+    for path in paths:
+        for xml in iter_record_xml(path):
+            try:
+                yield to_ecs(xml, original=original, meta=metadata)
+            except Exception as exc:  # noqa: BLE001 - one bad record must not stop the export
+                log.warning("skipping record that could not be mapped to ECS: %s", exc)
+
+
 def write_json_lines(
-    paths: Sequence[str], output: str, metadata: dict[str, Any] | None = None
+    paths: Sequence[str],
+    output: str,
+    metadata: dict[str, Any] | None = None,
+    *,
+    ecs: bool = True,
+    original: bool = False,
 ) -> int:
     """Write one JSON document per line to ``output`` ('-' is stdout). Returns the count.
 
@@ -115,17 +158,16 @@ def write_json_lines(
     can be fed to any collector that reads JSON (Wazuh, Filebeat, ...).
     """
     count = 0
+    docs = _documents(paths, metadata, ecs=ecs, original=original)
     if output == "-":
-        for path in paths:
-            for doc in iter_documents(path, metadata):
-                sys.stdout.write(json.dumps(doc) + "\n")
-                count += 1
+        for doc in docs:
+            sys.stdout.write(json.dumps(doc) + "\n")
+            count += 1
         return count
     with resolve_output_path(output).open("w", encoding="utf-8") as handle:
-        for path in paths:
-            for doc in iter_documents(path, metadata):
-                handle.write(json.dumps(doc) + "\n")
-                count += 1
+        for doc in docs:
+            handle.write(json.dumps(doc) + "\n")
+            count += 1
     return count
 
 
@@ -172,7 +214,9 @@ def _export_target(args: argparse.Namespace) -> str | None:
 
 def _run_export(args: argparse.Namespace, output: str) -> int:
     try:
-        count = write_json_lines(args.evtxfile, output, args.meta)
+        count = write_json_lines(
+            args.evtxfile, output, args.meta, ecs=not args.legacy, original=args.ecs_original
+        )
     except OSError as exc:
         return _fail("cannot write output", exc)
     if output != "-":
@@ -196,9 +240,17 @@ def _run_index(args: argparse.Namespace) -> int:
         verify_certs=not args.insecure,
         timeout=args.timeout,
     )
-    loader = EvtxToElk(es, index=args.index, bulk_size=args.bulk_size, metadata=args.meta)
+    loader = EvtxToElk(
+        es,
+        index=args.index,
+        bulk_size=args.bulk_size,
+        metadata=args.meta,
+        ecs=not args.legacy,
+        original=args.ecs_original,
+        dedupe=not args.no_dedupe,
+    )
     try:
-        if args.create_index and ensure_index(es, args.index):
+        if args.create_index and ensure_index(es, args.index, ecs=not args.legacy):
             log.info("created index %s", args.index)
         result = loader.load_many(args.evtxfile)
     except (ApiError, TransportError) as exc:
