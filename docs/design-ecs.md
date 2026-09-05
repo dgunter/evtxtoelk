@@ -1,6 +1,6 @@
 # Design: Elastic Common Schema output for evtxtoelk
 
-Status: accepted 5 September 2026; implemented in 2.1.0 (all phases).
+Status: accepted 5 September 2026; phases 1-5 implemented in 2.1.0, extended in 2.1.1.
 
 ## Goal
 
@@ -319,3 +319,9 @@ Learned from comparing against Winlogbeat's golden documents, and applied:
   `windows.<channel>` otherwise); Winlogbeat's modules do not set it.
 - Deliberate divergence: `winlog.event_data.*` is always kept, including
   for Sysmon where Winlogbeat removes promoted values.
+- Beyond Winlogbeat, because the fit is direct: Filtering Platform events
+  5150-5159 map their 5-tuple, protocol number, direction, process and
+  filter id to `source.*`, `destination.*`, `network.*`, `process.*` and
+  `rule.id` with connection allowed/denied categories; 4657 maps to
+  `registry.*`; 4656/4658/4660/4663 are categorised as file or registry
+  access by object type.

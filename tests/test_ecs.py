@@ -365,6 +365,9 @@ def test_security_share_and_object_access():
     )
     assert g["file.path"] == "C:\\secret\\plan.docx"
     assert g["file.extension"] == "docx"
+    assert g["event.category"] == ["file"]
+    assert g["event.type"] == ["access"]
+    assert g["event.action"] == "object-access-attempted"
     r = flat(
         to_ecs(
             record(
@@ -918,3 +921,72 @@ def test_index_body():
                 walk(spec["properties"], prefix + name + ".")
 
     walk(props)
+
+
+def test_security_filtering_platform_5156():
+    f = flat(
+        to_ecs(
+            record(
+                event_id="5156",
+                task="12810",
+                data={
+                    "ProcessID": "1234",
+                    "Application": "\\device\\harddiskvolume2\\windows\\system32\\svchost.exe",
+                    "Direction": "%%14593",
+                    "SourceAddress": "10.0.0.5",
+                    "SourcePort": "49152",
+                    "DestAddress": "93.184.216.34",
+                    "DestPort": "443",
+                    "Protocol": "6",
+                    "FilterRTID": "68910",
+                    "LayerName": "%%14611",
+                    "LayerRTID": "48",
+                },
+            )
+        )
+    )
+    assert f["event.action"] == "connection-permitted"
+    assert f["winlog.task"] == "Filtering Platform Connection"
+    assert f["source.ip"] == "10.0.0.5"
+    assert f["source.port"] == 49152
+    assert f["destination.ip"] == "93.184.216.34"
+    assert f["destination.port"] == 443
+    assert f["network.transport"] == "tcp"
+    assert f["network.iana_number"] == "6"
+    assert f["network.direction"] == "outbound"
+    assert f["winlog.event_data.Direction"] == "Outbound"
+    assert f["winlog.event_data.LayerName"] == "Connect"
+    assert f["process.pid"] == 1234
+    assert f["process.name"] == "svchost.exe"
+    assert f["rule.id"] == "68910"
+    assert f["related.ip"] == ["10.0.0.5", "93.184.216.34"]
+
+
+def test_security_registry_value_modified_4657():
+    f = flat(
+        to_ecs(
+            record(
+                event_id="4657",
+                task="12801",
+                data={
+                    "SubjectUserName": "admin",
+                    "ObjectName": "\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "ObjectValueName": "Updater",
+                    "OperationType": "%%1905",
+                    "OldValueType": "%%1873",
+                    "OldValue": "",
+                    "NewValueType": "%%1873",
+                    "NewValue": "C:\\evil.exe",
+                    "ProcessId": "0x4d0",
+                    "ProcessName": "C:\\Windows\\regedit.exe",
+                },
+            )
+        )
+    )
+    assert f["event.action"] == "registry-value-modified"
+    assert f["registry.path"].endswith("CurrentVersion\\Run")
+    assert f["registry.value"] == "Updater"
+    assert f["registry.data.strings"] == ["C:\\evil.exe"]
+    assert f["registry.data.type"] == "REG_SZ"
+    assert f["winlog.event_data.OperationType"] == "Existing registry value modified"
+    assert f["process.name"] == "regedit.exe"
