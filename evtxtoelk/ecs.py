@@ -214,12 +214,26 @@ _GUID = re.compile(
 )
 
 
+_PY_TIME = re.compile(r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(\.\d{1,6})?\+00:00$")
+_UPPER_GUID = re.compile(r"^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}$")
+
+
 def _normalize_scalar(value: str) -> str:
-    """Render values the way Winlogbeat does: minimal lowercase hex, uppercase GUIDs."""
+    """Render values the way Windows and Winlogbeat do, whichever parser produced them.
+
+    Minimal lowercase hex, uppercase GUIDs, ``true``/``false`` booleans, and
+    FILETIME values as ISO-8601 with a ``Z`` suffix.
+    """
     if _HEX.match(value):
         return f"0x{int(value, 16):x}"
     if _GUID.match(value):
         return value.upper()
+    if value in ("True", "False"):
+        return value.lower()
+    match = _PY_TIME.match(value)
+    if match:
+        fraction = (match.group(3) or ".").ljust(7, "0")
+        return f"{match.group(1)}T{match.group(2)}{fraction}Z"
     return value
 
 
@@ -351,7 +365,9 @@ def _data_items(event_data: dict[str, Any], named: dict[str, str], unnamed: list
         if isinstance(item, dict) and item.get(NAME_ATTR):
             name = str(item[NAME_ATTR])
             text = _text(item) or ""
-            named[name] = _braced_guid(text) if name in _GUID_FIELDS else _normalize_scalar(text)
+            # GUID-typed values: known fields, or the Rust parser's uppercase bare rendering
+            guid_typed = name in _GUID_FIELDS or bool(_UPPER_GUID.match(text))
+            named[name] = _braced_guid(text) if guid_typed else _normalize_scalar(text)
         else:
             text = _text(item)
             # positional values keep their slot; an empty element is an empty string

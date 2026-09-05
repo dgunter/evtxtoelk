@@ -17,7 +17,12 @@
   GUID-typed fields so documents match Winlogbeat either way.
 - Positional `EventData` values keep their slot: an empty element is an empty
   `paramN` rather than being skipped.
-- Control characters that XML forbids are rendered as `\xHH` text.
+- Values render the same way whichever parser produced them, following Windows'
+  own XML: binary payloads as uppercase hex (python-evtx used base64), FILETIME
+  values as ISO-8601 with a `Z` suffix, booleans as `true`/`false`, GUID-typed
+  values in uppercase braces, and control characters that XML forbids dropped.
+  The only remaining difference is that python-evtx renders multi-value
+  positional substitutions as one `<string>`-tagged blob.
 
 ### Added
 

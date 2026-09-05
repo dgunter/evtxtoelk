@@ -32,11 +32,9 @@ _INVALID_XML_CHARS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
 
 
 def _clean_xml(text: str) -> str:
-    """Drop the XML declaration and render forbidden control characters as ``\\xHH`` text."""
+    """Drop the XML declaration and the control characters XML forbids (as python-evtx does)."""
     text = _XML_DECLARATION.sub("", text, count=1)
-    if _INVALID_XML_CHARS.search(text):
-        text = _INVALID_XML_CHARS.sub(lambda m: f"\\x{ord(m.group(0)):02x}", text)
-    return text
+    return _INVALID_XML_CHARS.sub("", text)
 
 
 def _load_rust() -> Any | None:
@@ -47,12 +45,21 @@ def _load_rust() -> Any | None:
     return module if hasattr(module, "PyEvtxParser") else None
 
 
+def _binary_as_hex(node: Any) -> str:
+    """Render binary values as uppercase hex, as Windows and the Rust parser do (not base64)."""
+    return node.binary().hex().upper()
+
+
 def _load_python() -> Any | None:
     try:
         module = importlib.import_module("Evtx.Evtx")
+        nodes = importlib.import_module("Evtx.Nodes")
     except ImportError:
         return None
-    return module if hasattr(module, "Evtx") else None
+    if not hasattr(module, "Evtx"):
+        return None
+    nodes.BinaryTypeNode.string = _binary_as_hex
+    return module
 
 
 def available_backends() -> list[str]:

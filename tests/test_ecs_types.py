@@ -85,6 +85,12 @@ def test_normalize_scalar_and_braced_guid():
         == "{AD38FF07-BC05-4620-A79A-51E18F454768}"
     )
     assert ecs._normalize_scalar("plain") == "plain"
+    assert ecs._normalize_scalar("True") == "true"
+    assert ecs._normalize_scalar("False") == "false"
+    assert (
+        ecs._normalize_scalar("2016-07-08 22:16:31.244999+00:00") == "2016-07-08T22:16:31.244999Z"
+    )
+    assert ecs._normalize_scalar("2009-07-13 19:34:25+00:00") == "2009-07-13T19:34:25.000000Z"
     assert (
         ecs._braced_guid("ad38ff07-bc05-4620-a79a-51e18f454768")
         == "{AD38FF07-BC05-4620-A79A-51E18F454768}"
@@ -158,6 +164,18 @@ def test_event_data_fields_string_and_odd_inputs():
         }
     )
     assert named == {"LogonGuid": "{AD38FF07-BC05-4620-A79A-51E18F454768}"}
+    named, _ = ecs._event_data_fields(
+        {
+            "Data": [
+                {"@Name": "updateGuid", "#text": "A3576E2F-5FDC-4294-8501-E246E69F6FA9"},
+                {"@Name": "RunspaceId", "#text": "405e3aad-8d1e-4a6c-9d2c-96d4a9eaa2d5"},
+            ]
+        }
+    )
+    assert (
+        named["updateGuid"] == "{A3576E2F-5FDC-4294-8501-E246E69F6FA9}"
+    )  # uppercase bare: GUID-typed
+    assert named["RunspaceId"] == "405e3aad-8d1e-4a6c-9d2c-96d4a9eaa2d5"  # lowercase: a string
     assert unnamed == ["x", "", ""]
 
 
